@@ -59,9 +59,9 @@ export default function Workspace(){
    const userId=crypto.randomUUID(),assistantId=crypto.randomUUID();let started=false;
    setMessages(old=>[...old,{id:userId,role:'user',content:prompt},{id:assistantId,role:'assistant',content:'',model:modelId}]);
    try{await stream(modelId,chatId,controller.signal,e=>{
-    if(e.type==='start'){started=true;runningId.current=e.conversationId;if(!chatId)router.replace('/chat/'+e.conversationId);}
+    if(e.type==='start'){started=true;runningId.current=e.conversationId;}
     if(e.type==='delta')setMessages(old=>old.map(m=>m.id===assistantId?{...m,content:m.content+e.text}:m));
-    if(e.type==='done'){setPrompt('');setAttached([]);}
+    if(e.type==='done'){setPrompt('');setAttached([]);if(!chatId)router.replace('/chat/'+e.conversationId);}
    });}catch(e){setError(e instanceof Error&&e.name==='AbortError'?'Response stopped. The provider may still charge for generated tokens.':e instanceof Error?e.message:'Request failed.');if(!started)setMessages(old=>old.filter(m=>m.id!==userId&&m.id!==assistantId));else setMessages(old=>old.filter(m=>m.id!==assistantId));}
   }
   setBusy(false);abortRef.current=null;loadChats();
