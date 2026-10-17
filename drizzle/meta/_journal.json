@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1792132682976,
+      "tag": "0000_shallow_tony_stark",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1792135715693,
+      "tag": "0001_yellow_bishop",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1792159146985,
+      "tag": "0002_omniscient_sinister_six",
+      "breakpoints": true
+    }
+  ]
+}
