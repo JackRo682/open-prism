@@ -11,6 +11,12 @@ function mutationAllowed(req:Request){const origin=req.headers.get('origin');ret
 function db(){if(!env.DB)throw new Error('Database is not configured.');return env.DB;}
 async function handle(req:Request){
  const path=new URL(req.url).pathname.replace(/^\/api\//,'').split('/');
+ if(path.join('/')==='health/live'&&req.method==='GET')return json({status:'ok',service:'open-prism'});
+ if(path.join('/')==='health/ready'&&req.method==='GET'){
+  try{await db().prepare('SELECT id FROM usage LIMIT 1').first();}catch{return json({status:'unavailable',code:'DATABASE_NOT_READY'},503);}
+  if(!env.OPENAI_API_KEY)return json({status:'unavailable',code:'PROVIDER_NOT_READY'},503);
+  return json({status:'ready',service:'open-prism'});
+ }
  if(path.join('/')==='payments/webhook'&&req.method==='POST')return json(await paymentWebhook(req,db()));
  const user=await getChatGPTUser();
  if(path[0]==='bootstrap'&&req.method==='GET')return json({user:user?{name:user.fullName||user.email.split('@')[0],email:user.email}:null,beta:env.BETA_MODE==='true',models:env.BETA_MODE==='true'?MODELS.filter(m=>m.id==='gpt-6.1-sol'):MODELS,providers:Object.fromEntries(Object.entries(PROVIDERS).map(([p,v])=>[p,{configured:!!env[v.secret as keyof typeof env]}])),isAdmin:!!user&&!!env.ADMIN_USER_ID&&user.userId===env.ADMIN_USER_ID});
@@ -139,11 +145,22 @@ async function handle(req:Request){
  }
  return json({error:'Endpoint not found.'},404);
 }
-async function safe(req:Request){try{
+async function dispatch(req:Request){try{
  if(req.method!=='GET'&&req.body){
   const reader=req.clone().body!.getReader();let bytes=0;
   while(true){const part=await reader.read();if(part.done)break;bytes+=part.value.byteLength;if(bytes>200000){void reader.cancel();return json({error:'Request is too large.'},413);}}
  }
  return await handle(req);
 }catch(e){if(e instanceof BillingError)return json({error:e.message},e.status);if(e instanceof SyntaxError)return json({error:'Invalid JSON request.'},400);return json({error:'The request could not be completed. Please retry.'},500);}}
+async function safe(req:Request){
+ const requestId=uid(),started=Date.now();
+ const response=await dispatch(req);
+ response.headers.set('X-Request-ID',requestId);
+ response.headers.set('X-Content-Type-Options','nosniff');
+ response.headers.set('Cache-Control','no-store');
+ if(response.status===429)response.headers.set('Retry-After','60');
+ // SignalBrief's request-context pattern: never log prompts, emails or keys.
+ console.info(JSON.stringify({event:'api_request',requestId,method:req.method,status:response.status,durationMs:Date.now()-started}));
+ return response;
+}
 export const GET=safe;export const POST=safe;export const PATCH=safe;export const DELETE=safe;

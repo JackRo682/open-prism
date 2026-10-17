@@ -23,3 +23,8 @@ Build with the Sites plugin build-site.mjs helper; package and publish the exact
 ## Access and privacy
 
 The site may be publicly visited. AI requests and stored conversations require ChatGPT sign-in. Each conversation and attachment operation checks the authenticated owner on the server. Users can delete conversations, files or all conversation/file data in Settings. Usage records remain to enforce quotas and for accounting. Privacy and terms information is available at /privacy and /terms. Provider requests set store=false; provider processing policies still apply.
+
+## Operations
+
+/api/health/live and /api/health/ready support deployment probes. API responses include X-Request-ID and no-store headers; rate limits include Retry-After. Logs record request ID, method, status and duration without prompts, email addresses or keys. These patterns were reviewed against JackRo682/SignalBrief (limits.py and app.py), retaining Sites-native authentication and D1.
+

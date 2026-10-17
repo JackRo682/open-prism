@@ -147,3 +147,14 @@ test('free beta streams without a wallet and enforces model, daily and global li
  await assert.rejects(()=>beta.reserveBeta(env.DB,'new-account','global-blocked',4096,Date.now()),/allowance/);
  delete env.BETA_MODE;delete env.OPENAI_API_KEY;globalThis.fetch=originalFetch;
 });
+
+test('health probes check dependencies and every response has a request ID',async()=>{
+ user=null;
+ assert.equal((await call('health/live')).status,200);
+ delete env.OPENAI_API_KEY;
+ assert.equal((await call('health/ready')).status,503);
+ env.OPENAI_API_KEY='test-only-key';
+ assert.equal((await call('health/ready')).status,200);
+ const denied=await call('conversations');assert.equal(denied.status,401);assert.ok(denied.headers.get('X-Request-ID'));assert.equal(denied.headers.get('Cache-Control'),'no-store');
+ delete env.OPENAI_API_KEY;
+});
