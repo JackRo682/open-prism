@@ -1,30 +1,61 @@
 # Open Prism
 
-Prism runs on ChatGPT Sites with Cloudflare Workers, D1 storage, R2 files and Sign in with ChatGPT.
+Prism is an authenticated AI workspace with provider adapters for OpenAI, Anthropic, and Google. It runs on **ChatGPT Sites, Cloudflare Workers, D1, and R2**, with Sign in with ChatGPT. The current free beta enables GPT-6.1 Sol; the existing model catalog and paid-access checks remain in place.
 
-## Free beta
+The November 2026 interface follows the two supplied Gemini references: a dark 288px sidebar, a blue-violet workspace glow, a centered 660px composer, and a 240px settings menu. Prism keeps its own name, actual account information, and configured model names. See [the implementation notes](docs/gemini-design-implementation.md) for measurements, routes, API contracts, and verification limits.
 
-Set BETA_MODE=true to enable GPT-6.1 Sol without purchasing customer credits. Limits are enforced in one conditional D1 write before provider access: 20 requests per user per UTC day, USD 0.20 reserved usage per user/day, two active responses per user, and USD 8 total beta usage across all users. Requests reserve conservative UTF-8 input bounds and 1,024 output tokens. Successful requests settle against actual provider token counts; uncertain requests retain their allowance. Conversation deletion does not reset quotas. Beta conversations support 16 KB of content. Expensive models and Pro mode are rejected server-side.
+## Implemented behavior
 
-Customer payments stay disabled (PAYMENTS_MODE=disabled). Existing prepaid billing code is retained for a separately configured commercial release. No subscription is enabled.
+- Chat and Work welcome states, model selection, reasoning controls, streamed responses, stop, saved conversations, and model comparison when the runtime permits it.
+- File upload and attachment; new notebooks are saved Markdown documents in the existing private file store.
+- System/light/dark themes, nested settings menus, responsive navigation, and a chat-search dialog that searches the signed-in user's conversation titles and message text.
+- Saved personalization, memory, work-response preferences, and up to 20 reusable skills. Type `@` in the composer to select a saved skill. The server reads the owner's current settings on each request.
+- Memory import with a preview and replacement confirmation; public conversation snapshots with owner-managed revocation.
+- Browser speech recognition when supported, print-to-PDF through the browser, and an app-install action when the browser offers installation.
 
-## Secrets
+Remote browser control, remote code execution, Google Drive OAuth, media generation, and scheduled/background jobs are not connected. Unavailable features are labeled where exposed. Feedback opens a prefilled GitHub issue for the user to review and submit. No synthetic model answers or successful remote-action results are generated.
 
-Configure OPENAI_API_KEY in native Sites runtime settings as a secret. BETA_MODE and PAYMENTS_MODE are runtime settings. ANTHROPIC_API_KEY and GEMINI_API_KEY are optional for later releases. ADMIN_USER_ID is the exact Sites application user ID, not the workspace user ID. Never commit API keys or local env files.
+## Runtime configuration
 
-## Verification
+| Setting or binding | Purpose |
+| --- | --- |
+| `DB` | Existing D1 database; apply all migrations in `drizzle/`, including `0003_workspace_settings_and_shares.sql`. |
+| `BUCKET` | Existing R2 storage for private text files and Markdown notebooks. |
+| `OPENAI_API_KEY` | Server secret required for the current free-beta model. |
+| `ANTHROPIC_API_KEY`, `GEMINI_API_KEY` | Optional server secrets for additional provider adapters; model access and runtime policy still apply. |
+| `BETA_MODE=true` | Enables the bounded GPT-6.1 Sol beta. |
+| `PAYMENTS_MODE=disabled` | Keeps customer payments disabled. |
+| `ADMIN_USER_ID` | Optional exact Sites application user ID for administrator access. |
 
+Configure keys in the site's server runtime. Never commit keys or local environment files. The interface changes require no new provider accounts, OAuth clients, API keys, or webhooks. Provider API access and quota are separate from consumer chat subscriptions.
+
+The preserved commercial billing code has its own launch requirements, including `TOSS_SECRET_KEY`, `TOSS_CLIENT_KEY`, and `LAUNCH_APPROVED`. This redesign does not enable payments or subscriptions.
+
+## Free-beta limits
+
+Limits are reserved atomically before provider access: **20 requests per user per UTC day**, **USD 0.20 reserved usage per user/day**, **two active responses per user**, and **USD 8 total beta usage**. Responses are limited to 1,024 output tokens; beta context is bounded to 16,000 bytes, including selected documents and applied preferences. Successful requests settle against provider-reported usage; uncertain requests retain their reservation. Deleting conversations does not reset quotas. Other models and Pro mode are rejected by the beta policy.
+
+## Verification and development
+
+Use Node.js 22.13 or newer and the package manager version pinned in `package.json`.
+
+```sh
 pnpm install --frozen-lockfile
 node node_modules/typescript/bin/tsc --noEmit
 node --test tests/integration.mjs
+pnpm build
+```
 
-Build with the Sites plugin build-site.mjs helper; package and publish the exact pushed source commit using the Sites workflow. On Windows, set SITES_PNPM_BIN to the bundled pnpm.mjs when invoking the build helper. The 29 integration checks use isolated SQLite and mocked provider transports. Live model requests and browser checks are separate acceptance tests.
+The integration suite contains **36 tests**, using isolated SQLite and mocked provider transports. It covers authentication, ownership, streaming persistence, settings validation and context application, search, share revocation and concurrency, uploads, quotas, and accounting. Browser behavior and live provider access are separate acceptance checks.
 
-## Access and privacy
+Use the existing Sites build and publishing workflow for hosted releases. Package and publish the exact pushed source commit. Managed preview uses `sites-preview start <absolute-checkout>`; use its returned URL. A portable checkout can use `pnpm dev`.
 
-The site may be publicly visited. AI requests and stored conversations require ChatGPT sign-in. Each conversation and attachment operation checks the authenticated owner on the server. Users can delete conversations, files or all conversation/file data in Settings. Usage records remain to enforce quotas and for accounting. Privacy and terms information is available at /privacy and /terms. Provider requests set store=false; provider processing policies still apply.
+## Access and operations
 
-## Operations
+Private conversations, files, settings, and share management require ChatGPT sign-in and server-side ownership checks. Public share URLs expose a snapshot to anyone holding the token; revocation is checked when the link is read. Attached file bodies are omitted from snapshots, while text already included in the conversation remains visible. Account-data deletion removes conversations, files, settings, and public shares; usage/accounting records remain.
 
-/api/health/live and /api/health/ready support deployment probes. API responses include X-Request-ID and no-store headers; rate limits include Retry-After. Logs record request ID, method, status and duration without prompts, email addresses or keys. These patterns were reviewed against JackRo682/SignalBrief (limits.py and app.py), retaining Sites-native authentication and D1.
+`/api/health/live` and `/api/health/ready` provide deployment probes. API responses include `X-Request-ID`, `no-store`, and rate-limit `Retry-After` headers where applicable. Operational logs exclude prompts, email addresses, and API keys.
 
+## Project mapping
+
+This repository is the multi-model AI workspace. Its Sites project is declared in [`.openai/hosting.json`](.openai/hosting.json). The separate `JackRo682/SignalBrief` project uses Supabase and Vercel. The redesign preserves Prism's existing Sites/Workers/D1/R2 architecture.

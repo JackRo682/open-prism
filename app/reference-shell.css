@@ -1,0 +1,651 @@
+/* Visual reference: 1440 × 703 home and 1440 × 699 settings screenshots.
+ * The 288px sidebar and 660 × 64px composer are measured. Responsive rules
+ * and the CSS gradient reconstruction are adaptations of the desktop design.
+ */
+:root {
+  color-scheme: dark;
+  --prism-page: #0f0f0f;
+  --prism-sidebar: #1f1f1f;
+  --prism-surface: #1f1f1f;
+  --prism-surface-raised: #292a2d;
+  --prism-composer: #1e1f20;
+  --prism-ink: #e3e3e3;
+  --prism-muted: #9aa0a6;
+  --prism-placeholder: #9aa0a6;
+  --prism-border: rgb(255 255 255 / 12%);
+  --prism-hover: rgb(255 255 255 / 8%);
+  --prism-accent: #a8c7fa;
+  --prism-selected: #343537;
+  --prism-danger: #f2b8b5;
+  --prism-success: #a8dab5;
+  --prism-menu-shadow: 0 0 20px rgb(0 0 0 / 28%);
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --prism-page: #fff;
+  --prism-sidebar: #f0f4f9;
+  --prism-surface: #fff;
+  --prism-surface-raised: #f0f4f9;
+  --prism-composer: #f0f4f9;
+  --prism-ink: #1f1f1f;
+  --prism-muted: #61666c;
+  --prism-placeholder: #70757a;
+  --prism-border: rgb(31 31 31 / 14%);
+  --prism-hover: rgb(31 31 31 / 7%);
+  --prism-accent: #0b57d0;
+  --prism-selected: #e2e7ee;
+  --prism-danger: #b3261e;
+  --prism-success: #137333;
+  --prism-menu-shadow: 0 4px 24px rgb(60 64 67 / 18%);
+}
+
+body:has(.gemini-shell) {
+  background: var(--prism-page);
+  color: var(--prism-ink);
+}
+
+.app-shell.gemini-shell {
+  --prism-sidebar-width: 288px;
+  --ink: var(--prism-ink);
+  --muted: var(--prism-muted);
+  --border: var(--prism-border);
+  --white: var(--prism-surface);
+  --sidebar: var(--prism-sidebar);
+  --purple: var(--prism-accent);
+  --lavender: var(--prism-hover);
+  display: flex;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--prism-page);
+  color: var(--prism-ink);
+  font-family: 'Google Sans Flex', 'Google Sans', Arial, 'Noto Sans KR', sans-serif;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+.gemini-shell :where(button, input, textarea, select) { font-family: inherit; }
+.gemini-shell :where(button, a, input, select, textarea):focus-visible {
+  outline: 2px solid var(--prism-accent);
+  outline-offset: 3px;
+}
+.gemini-shell button:disabled { cursor: not-allowed; }
+.gemini-shell ::selection { background: rgb(138 180 248 / 30%); }
+
+.gemini-shell .sidebar.gemini-sidebar {
+  position: fixed;
+  inset: 0 auto 0 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  width: var(--prism-sidebar-width);
+  height: 100dvh;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  background: var(--prism-sidebar);
+  color: var(--prism-ink);
+  transform: none;
+  transition: width 180ms cubic-bezier(.2, 0, 0, 1), transform 180ms cubic-bezier(.2, 0, 0, 1);
+}
+
+.gemini-shell .gemini-brand-row {
+  display: flex;
+  align-items: center;
+  flex: 0 0 48px;
+  height: 48px;
+  min-width: 0;
+  padding: 8px 10px 8px 14px;
+  gap: 8px;
+}
+.gemini-shell .gemini-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: max-content;
+  min-width: 0;
+  padding: 0;
+  color: var(--prism-ink);
+  font-size: 18px;
+  line-height: 24px;
+  font-weight: 500;
+  letter-spacing: -.5px;
+  white-space: nowrap;
+}
+.gemini-shell .gemini-brand > .model-mark,
+.gemini-shell .gemini-brand > svg {
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  padding: 2px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--prism-accent);
+}
+.gemini-shell .gemini-brand > span:last-child {
+  font-family: inherit;
+  font-size: 18px;
+  line-height: 24px;
+  font-weight: 500;
+  letter-spacing: -.5px;
+}
+.gemini-shell .sidebar-tools {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+.gemini-shell .sidebar-tools > button,
+.gemini-shell .gemini-new-button,
+.gemini-shell .gemini-mobile-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+  padding: 6px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--prism-muted);
+}
+.gemini-shell .sidebar-tools > button:hover,
+.gemini-shell .gemini-new-button:hover,
+.gemini-shell .gemini-mobile-toggle:hover { background: var(--prism-hover); }
+
+.gemini-shell .gemini-navigation {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  padding: 9px 12px 0;
+  gap: 0;
+}
+.gemini-shell .gemini-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 32px;
+  height: 32px;
+  margin: 0;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 9999px;
+  background: transparent;
+  color: var(--prism-ink);
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 400;
+  text-align: start;
+  white-space: nowrap;
+}
+.gemini-shell .gemini-nav-item > svg {
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+  stroke-width: 1.8;
+}
+.gemini-shell .gemini-nav-item > span { overflow: hidden; text-overflow: ellipsis; }
+.gemini-shell .gemini-nav-item:hover,
+.gemini-shell .gemini-nav-item[aria-current='page'] { background: var(--prism-hover); }
+.gemini-shell .gemini-nav-item:disabled { opacity: .45; }
+
+.gemini-shell .gemini-notebooks {
+  flex-shrink: 0;
+  margin: 20px 0 0;
+  padding: 0 12px;
+}
+.gemini-shell .gemini-notebooks :is(h2, h3, h4) {
+  margin: 0;
+  padding: 0 4px;
+  color: var(--prism-muted);
+  font-size: 12px;
+  line-height: 20px;
+  font-weight: 400;
+  letter-spacing: 0;
+}
+.gemini-shell .gemini-notebooks > button {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 36px;
+  margin-top: 3px;
+  padding: 0 4px;
+  border-radius: 9999px;
+  color: var(--prism-ink);
+  font-size: 14px;
+  text-align: start;
+}
+.gemini-shell .gemini-notebooks > button > svg { width: 20px; height: 20px; }
+.gemini-shell .gemini-notebooks > button:hover { background: var(--prism-hover); }
+
+.gemini-shell .gemini-activity {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 14px;
+  min-height: 44px;
+  margin: 28px 20px 0 24px;
+  padding: 0;
+  color: var(--prism-ink);
+  font-size: 14px;
+  line-height: 20px;
+  text-align: start;
+}
+.gemini-shell .gemini-activity > svg { flex: 0 0 22px; width: 22px; height: 22px; }
+.gemini-shell .gemini-activity :is(p, span, strong) { font-size: 14px; line-height: 20px; font-weight: 400; }
+.gemini-shell .gemini-activity :is(a, button) { display: block; padding: 0; text-align: start; text-decoration: underline; text-underline-offset: 2px; }
+.gemini-shell .gemini-activity u { display: block; text-underline-offset: 2px; }
+.gemini-shell .gemini-recent {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 18px 12px 10px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--prism-border) transparent;
+}
+.gemini-shell .gemini-recent :is(h2, h3, h4) { padding: 0 4px 8px; color: var(--prism-muted); font-size: 12px; font-weight: 400; }
+.gemini-shell .gemini-recent > button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 36px;
+  padding: 8px;
+  overflow: hidden;
+  border-radius: 9999px;
+  color: var(--prism-ink);
+  font-size: 13px;
+  text-align: start;
+}
+.gemini-shell .gemini-recent > button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gemini-shell .gemini-recent > button:hover,
+.gemini-shell .gemini-recent > button.selected,
+.gemini-shell .gemini-recent > button.is-active { background: var(--prism-hover); }
+
+.gemini-shell .gemini-account-row {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 4px;
+  min-height: 64px;
+  margin-top: auto;
+  padding: 10px 10px 10px 14px;
+  background: var(--prism-sidebar);
+}
+.gemini-shell .gemini-account {
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  gap: 8px;
+  width: auto;
+  min-width: 0;
+  min-height: 44px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--prism-ink);
+  text-align: start;
+}
+.gemini-shell .gemini-account > :is(.avatar, .gemini-avatar) {
+  display: grid;
+  place-items: center;
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: #ce4f7a;
+  color: #fff;
+  box-shadow: none;
+  font-size: 16px;
+  font-weight: 400;
+}
+.gemini-shell .gemini-account > span:nth-child(2) { flex: 1; min-width: 0; }
+.gemini-shell .gemini-account strong {
+  display: block;
+  overflow: hidden;
+  color: var(--prism-ink);
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gemini-shell .gemini-account small { display: block; margin-top: 2px; color: var(--prism-muted); font-size: 12px; line-height: 18px; }
+.gemini-shell .gemini-account-row :is(.prism-settings-trigger, .gemini-settings-trigger) { flex-shrink: 0; margin-top: 8px; }
+
+.gemini-shell .main-shell.gemini-workspace {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  height: 100dvh;
+  min-height: 0;
+  margin-left: var(--prism-sidebar-width);
+  overflow: hidden;
+  background: var(--prism-page);
+  transition: margin-left 180ms cubic-bezier(.2, 0, 0, 1);
+}
+/* Layering recreates the asymmetry: a broad lower blue glow, a faint upper
+ * right lobe, and darker upper left. The glow is decorative, not a bitmap. */
+.gemini-shell .gemini-workspace::before {
+  position: fixed;
+  z-index: -1;
+  inset: 0 0 0 var(--prism-sidebar-width);
+  background:
+    radial-gradient(ellipse 340px 235px at 32% 24%, rgb(7 8 14 / 82%) 0%, rgb(7 8 14 / 46%) 45%, transparent 100%),
+    radial-gradient(ellipse 570px 360px at 50% 61%, rgb(41 48 115 / 76%) 0%, rgb(36 42 96 / 69%) 24%, rgb(29 32 68 / 42%) 53%, rgb(20 21 35 / 22%) 76%, transparent 100%),
+    radial-gradient(ellipse 360px 305px at 68% 29%, rgb(32 35 70 / 80%) 0%, rgb(24 27 47 / 54%) 45%, transparent 100%);
+  content: '';
+  pointer-events: none;
+  transition: left 180ms cubic-bezier(.2, 0, 0, 1);
+}
+:root[data-theme='light'] .gemini-shell .gemini-workspace::before {
+  background:
+    radial-gradient(ellipse 570px 360px at 50% 61%, rgb(196 209 255 / 45%), rgb(224 229 252 / 24%) 52%, transparent 100%),
+    radial-gradient(ellipse 360px 305px at 68% 29%, rgb(226 220 253 / 26%), transparent 100%);
+}
+.gemini-shell .gemini-topbar {
+  position: relative;
+  flex: 0 0 60px;
+  z-index: 15;
+  inset: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 60px;
+  padding: 12px 14px;
+  border: 0;
+  background: transparent;
+}
+.gemini-shell .gemini-mobile-toggle { display: none; }
+.gemini-shell .gemini-top-actions { display: flex; align-items: center; gap: 14px; margin-left: auto; }
+.gemini-shell .gemini-install {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 98px;
+  height: 36px;
+  margin-right: 18px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 9999px;
+  background: #171717;
+  color: var(--prism-ink);
+  font-size: 14px;
+  line-height: 20px;
+}
+.gemini-shell .gemini-install:hover { background: var(--prism-hover); }
+.gemini-shell .gemini-install svg { width: 16px; height: 16px; }
+:root[data-theme='light'] .gemini-shell .gemini-install { background: var(--prism-composer); }
+.gemini-shell .gemini-pdf-group {
+  display: flex;
+  width: 128px;
+  height: 37px;
+  overflow: hidden;
+  border: 1px solid #5073e0;
+  border-radius: 9px;
+  box-shadow: 0 2px 5px rgb(40 58 121 / 25%);
+}
+.gemini-shell .gemini-pdf-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  min-width: 0;
+  padding: 0 10px;
+  background: linear-gradient(110deg, #4b6dd4, #3f5bb1);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 400;
+  white-space: nowrap;
+}
+.gemini-shell .gemini-pdf-button:hover { filter: brightness(1.1); }
+.gemini-shell .gemini-pdf-settings {
+  display: grid;
+  place-items: center;
+  width: 33px;
+  padding: 0;
+  border-left: 1px solid #5073e0;
+  background: var(--prism-page);
+  color: #6b8af0;
+}
+.gemini-shell .gemini-pdf-settings:hover { background: var(--prism-hover); }
+.gemini-shell .gemini-pdf-settings svg { width: 16px; height: 16px; }
+.gemini-shell .gemini-new-button { color: var(--prism-ink); }
+.gemini-shell .main-content.gemini-main {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--prism-border) transparent;
+}
+.gemini-shell .gemini-welcome { display: flex; justify-content: center; min-height: calc(100dvh - 60px); padding: 0 16px; }
+.gemini-shell .gemini-welcome-inner {
+  position: relative;
+  width: min(100%, 660px);
+  padding-top: max(52px, calc(50dvh - 179px));
+  padding-bottom: 48px;
+}
+.gemini-shell .gemini-welcome-inner > h1 {
+  margin: 0 0 44px;
+  color: var(--prism-ink);
+  font-family: inherit;
+  font-size: 36px;
+  line-height: 44px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-align: center;
+  text-wrap: balance;
+}
+.gemini-shell .gemini-compose-wrap { position: relative; width: 100%; margin: 0; }
+.gemini-shell .gemini-composer {
+  position: relative;
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 8px;
+  min-height: 64px;
+  padding: 12px;
+  border: 0;
+  border-radius: 32px;
+  background: var(--prism-composer);
+  box-shadow: 0 2px 8px -2px rgb(0 0 0 / 16%);
+  transition: box-shadow 100ms;
+}
+.gemini-shell .gemini-composer:focus-within { border: 0; box-shadow: 0 2px 8px -2px rgb(0 0 0 / 16%); }
+.gemini-shell .gemini-composer textarea.gemini-prompt {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  height: 40px;
+  min-height: 40px;
+  max-height: 144px;
+  margin: 0;
+  padding: 8px 0;
+  overflow: auto;
+  border: 0;
+  border-radius: 0;
+  outline: none;
+  background: transparent;
+  color: var(--prism-ink);
+  font: 400 17px / 24px 'Google Sans Flex', 'Google Sans', Arial, 'Noto Sans KR', sans-serif;
+  resize: none;
+  overflow-wrap: anywhere;
+  scrollbar-width: thin;
+  scrollbar-color: var(--prism-border) transparent;
+}
+.gemini-shell .gemini-composer textarea.gemini-prompt::placeholder { color: var(--prism-placeholder); opacity: 1; }
+.gemini-shell .gemini-composer textarea.gemini-prompt:focus-visible { outline: none; }
+.gemini-shell .gemini-composer-actions { display: flex; align-items: center; gap: 12px; min-width: 0; padding-right: 4px; }
+.gemini-shell .gemini-add,
+.gemini-shell .gemini-mic,
+.gemini-shell .gemini-send {
+  display: grid;
+  place-items: center;
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+  margin: 0;
+  padding: 4px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--prism-ink);
+  box-shadow: none;
+}
+.gemini-shell .gemini-add { justify-self: end; }
+.gemini-shell .gemini-add svg { width: 26px; height: 26px; }
+.gemini-shell .gemini-mic svg { width: 22px; height: 22px; }
+.gemini-shell .gemini-send svg { width: 20px; height: 20px; }
+.gemini-shell .gemini-add:hover,
+.gemini-shell .gemini-mic:hover { background: var(--prism-hover); }
+.gemini-shell .gemini-mic[aria-pressed='true'] { background: rgb(242 184 181 / 16%); color: var(--prism-danger); }
+.gemini-shell .gemini-send { background: var(--prism-ink); color: var(--prism-page); }
+.gemini-shell .gemini-send:hover { background: var(--prism-accent); color: var(--prism-page); }
+.gemini-shell .gemini-send:disabled { background: var(--prism-surface-raised); color: var(--prism-muted); opacity: .65; }
+.gemini-shell .gemini-model-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 78px;
+  max-width: 200px;
+  min-height: 32px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 9999px;
+  background: transparent;
+  color: var(--prism-ink);
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.gemini-shell .gemini-model-trigger:hover { background: var(--prism-hover); }
+.gemini-shell .gemini-model-trigger > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.gemini-shell .gemini-model-trigger > svg { width: 16px; height: 16px; color: var(--prism-ink); }
+.gemini-shell .gemini-mode-switch { display: flex; align-items: center; justify-content: center; gap: 0; width: max-content; min-height: 38px; margin: 14px auto 0; }
+.gemini-shell .gemini-mode-switch > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 54px;
+  min-height: 38px;
+  padding: 6px 12px;
+  border: 1px solid transparent;
+  border-radius: 9999px;
+  background: transparent;
+  color: var(--prism-ink);
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 400;
+}
+.gemini-shell .gemini-mode-switch > button:hover { background: var(--prism-hover); }
+.gemini-shell .gemini-mode-switch > button:is(.active, .selected, [aria-selected='true'], [aria-pressed='true']) { border-color: var(--prism-border); background: var(--prism-selected); }
+
+/* Collapsed desktop rail preserves the workspace-relative center. */
+.app-shell.gemini-shell.sidebar-collapsed { --prism-sidebar-width: 72px; }
+.gemini-shell.sidebar-collapsed .gemini-brand-row { justify-content: center; padding-inline: 8px; }
+.gemini-shell.sidebar-collapsed .gemini-brand,
+.gemini-shell.sidebar-collapsed .sidebar-tools > button:first-child,
+.gemini-shell.sidebar-collapsed .gemini-nav-item > span,
+.gemini-shell.sidebar-collapsed .gemini-notebooks,
+.gemini-shell.sidebar-collapsed .gemini-activity,
+.gemini-shell.sidebar-collapsed .gemini-recent,
+.gemini-shell.sidebar-collapsed .gemini-account > span:nth-child(2) { display: none; }
+.gemini-shell.sidebar-collapsed .sidebar-tools { margin: 0; }
+.gemini-shell.sidebar-collapsed .gemini-navigation { padding-inline: 12px; }
+.gemini-shell.sidebar-collapsed .gemini-nav-item { justify-content: center; height: 40px; min-height: 40px; padding: 0; }
+.gemini-shell.sidebar-collapsed .gemini-account-row { flex-direction: column; gap: 6px; padding: 10px 8px 14px; }
+.gemini-shell.sidebar-collapsed .gemini-account { flex: 0 0 auto; min-height: 36px; }
+.gemini-shell.sidebar-collapsed .gemini-account-row :is(.prism-settings-trigger, .gemini-settings-trigger) { margin-top: 0; }
+
+@media (max-width: 1023px) and (min-width: 768px) {
+  .gemini-shell .gemini-welcome-inner > h1 { font-size: 32px; line-height: 42px; }
+  .gemini-shell .gemini-composer-actions { gap: 6px; }
+  .gemini-shell .gemini-model-trigger { max-width: 150px; }
+}
+
+@media (max-width: 767px) {
+  .app-shell.gemini-shell,
+  .app-shell.gemini-shell.sidebar-collapsed { --prism-sidebar-width: 0px; }
+  .gemini-shell .sidebar.gemini-sidebar { width: min(288px, calc(100vw - 40px)); transform: translateX(-100%); }
+  .gemini-shell.sidebar-open .sidebar.gemini-sidebar { transform: translateX(0); }
+  .gemini-shell .sidebar-backdrop { display: none; }
+  .gemini-shell.sidebar-open .sidebar-backdrop { position: fixed; z-index: 49; inset: 0; display: block; background: rgb(0 0 0 / 45%); backdrop-filter: blur(2px); }
+  .gemini-shell .main-shell.gemini-workspace { width: 100%; margin-left: 0; }
+  .gemini-shell .gemini-workspace::before { left: 0; background-size: auto; }
+  .gemini-shell .gemini-topbar { height: 60px; padding: 12px; }
+  .gemini-shell .gemini-mobile-toggle { display: inline-flex; color: var(--prism-ink); }
+  .gemini-shell .gemini-top-actions { gap: 10px; }
+  .gemini-shell .gemini-install { min-width: 36px; width: 36px; padding: 0; margin-right: 0; }
+  .gemini-shell .gemini-install > span { display: none; }
+  .gemini-shell .gemini-pdf-group { width: 118px; height: 36px; }
+  .gemini-shell .gemini-new-button { display: none; }
+  .gemini-shell .gemini-welcome { padding-inline: 16px; }
+  .gemini-shell .gemini-welcome-inner { padding-top: max(48px, calc(46dvh - 168px)); padding-bottom: 32px; }
+  .gemini-shell .gemini-welcome-inner > h1 { margin-bottom: 36px; font-size: 28px; line-height: 38px; }
+  .gemini-shell .gemini-composer { grid-template-columns: 32px minmax(0, 1fr) auto; gap: 4px; min-height: 60px; padding: 10px 8px; border-radius: 30px; }
+  .gemini-shell .gemini-composer textarea.gemini-prompt { font-size: 16px; }
+  .gemini-shell .gemini-composer-actions { gap: 2px; padding-right: 0; }
+  .gemini-shell .gemini-model-trigger { gap: 4px; min-width: 0; max-width: 112px; padding: 0 6px; font-size: 12px; }
+  .gemini-shell .gemini-model-trigger > svg { width: 14px; height: 14px; }
+  .gemini-shell .gemini-mode-switch { margin-top: 14px; }
+  /* A previously collapsed desktop rail still opens as a full mobile drawer. */
+  .gemini-shell.sidebar-collapsed .gemini-brand-row { justify-content: flex-start; padding: 8px 10px 8px 14px; }
+  .gemini-shell.sidebar-collapsed .gemini-brand { display: inline-flex; }
+  .gemini-shell.sidebar-collapsed .sidebar-tools { margin-left: auto; }
+  .gemini-shell.sidebar-collapsed .sidebar-tools > button:first-child { display: inline-flex; }
+  .gemini-shell.sidebar-collapsed .gemini-nav-item { justify-content: flex-start; height: 32px; min-height: 32px; padding: 0 4px; }
+  .gemini-shell.sidebar-collapsed .gemini-nav-item > span,
+  .gemini-shell.sidebar-collapsed .gemini-notebooks,
+  .gemini-shell.sidebar-collapsed .gemini-account > span:nth-child(2) { display: block; }
+  .gemini-shell.sidebar-collapsed .gemini-activity { display: flex; }
+  .gemini-shell.sidebar-collapsed .gemini-recent { display: block; }
+  .gemini-shell.sidebar-collapsed .gemini-account-row { flex-direction: row; gap: 4px; padding: 10px 10px 10px 14px; }
+  .gemini-shell.sidebar-collapsed .gemini-account { flex: 1 1 auto; min-height: 44px; }
+  .gemini-shell.sidebar-collapsed .gemini-account-row :is(.prism-settings-trigger, .gemini-settings-trigger) { margin-top: 8px; }
+}
+
+@media (max-width: 380px) {
+  .gemini-shell .gemini-model-trigger { max-width: 90px; }
+  .gemini-shell .gemini-pdf-group { width: 110px; }
+}
+
+@media (max-height: 540px) and (min-width: 768px) {
+  .gemini-shell .gemini-welcome-inner { padding-top: 40px; }
+  .gemini-shell .gemini-welcome-inner > h1 { margin-bottom: 28px; }
+  .gemini-shell .gemini-activity { margin-top: 12px; }
+  .gemini-shell .gemini-recent { padding-top: 8px; }
+  .gemini-shell .gemini-notebooks { margin-top: 12px; }
+  .gemini-shell .gemini-sidebar { overflow-y: auto; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gemini-shell,
+  .gemini-shell *,
+  .gemini-shell *::before,
+  .gemini-shell *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
+}
+

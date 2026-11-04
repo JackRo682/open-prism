@@ -4,6 +4,7 @@ import { MODELS, PROVIDERS, findModel, Provider } from '../../../lib/models';
 import { invokeProvider, Turn } from '../../../lib/provider';
 import { BillingError, billingOverview, getBillingConfig, validateConfig, launchBlockers, paymentRequest, paymentWebhook, reserve, settle, cost } from '../../../lib/billing';
 import { reserveBeta, betaCost, BETA_OUTPUT, BETA_INPUT_BYTES } from '../../../lib/beta';
+import { getWorkspaceSettings, patchWorkspaceSettings, withWorkspaceContext, publicMessageContent } from '../../../lib/workspace-settings';
 export const dynamic='force-dynamic';
 const json=(data:unknown,status=200)=>Response.json(data,{status,headers:{'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
 const uid=()=>crypto.randomUUID();
@@ -18,11 +19,55 @@ async function handle(req:Request){
   return json({status:'ready',service:'open-prism'});
  }
  if(path.join('/')==='payments/webhook'&&req.method==='POST')return json(await paymentWebhook(req,db()));
+ if(path[0]==='public-shares'&&path.length===2&&req.method==='GET'){
+  if(!/^[a-f0-9]{64}$/.test(path[1]))return json({error:'Shared conversation not found.'},404);
+  const share=await db().prepare('SELECT title,snapshot,created_at FROM public_shares WHERE token=?').bind(path[1]).first<{title:string;snapshot:string;created_at:number}>();
+  if(!share)return json({error:'This shared conversation is unavailable or has been revoked.'},404);
+  return json({title:share.title,created_at:share.created_at,messages:JSON.parse(share.snapshot)});
+ }
  const user=await getChatGPTUser();
  if(path[0]==='bootstrap'&&req.method==='GET')return json({user:user?{name:user.fullName||user.email.split('@')[0],email:user.email}:null,beta:env.BETA_MODE==='true',models:env.BETA_MODE==='true'?MODELS.filter(m=>m.id==='gpt-6.1-sol'):MODELS,providers:Object.fromEntries(Object.entries(PROVIDERS).map(([p,v])=>[p,{configured:!!env[v.secret as keyof typeof env]}])),isAdmin:!!user&&!!env.ADMIN_USER_ID&&user.userId===env.ADMIN_USER_ID});
  if(!user)return json({error:'Sign in with ChatGPT to save your work and use AI models.'},401);
  if(req.method!=='GET'&&!mutationAllowed(req))return json({error:'Invalid request origin.'},403);
  const owner=user.userId,sql=db();
+ if(path[0]==='settings'&&path.length===1){
+  if(req.method==='GET')return json(await getWorkspaceSettings(sql,owner));
+  if(req.method==='PATCH')return json(await patchWorkspaceSettings(sql,owner,await req.json()));
+ }
+ if(path[0]==='search'&&path.length===1&&req.method==='GET'){
+  const query=(new URL(req.url).searchParams.get('q')||'').trim();
+  if(query.length>200)return json({error:'Search queries must be 200 characters or fewer.'},400);
+  if(!query)return json({results:[]});
+  const literal='%'+query.replace(/[\\%_]/g,'\\$&')+'%';
+  const rows=(await sql.prepare("SELECT c.id,c.title,c.model,c.updated_at,(SELECT m.content FROM messages m WHERE m.conversation_id=c.id AND m.content LIKE ? ESCAPE '\\' ORDER BY m.created_at DESC LIMIT 1) AS matching_content FROM conversations c WHERE c.user_id=? AND (c.title LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id=c.id AND m.content LIKE ? ESCAPE '\\')) ORDER BY c.updated_at DESC LIMIT 50").bind(literal,owner,literal,literal).all<{id:string;title:string;model:string;updated_at:number;matching_content:string|null}>()).results;
+  return json({results:rows.map(({matching_content,...row})=>{
+   const content=publicMessageContent(matching_content||row.title).replace(/\s+/g,' '),position=content.toLocaleLowerCase().indexOf(query.toLocaleLowerCase()),start=Math.max(0,position-60);
+   return {...row,snippet:(start?'…':'')+content.slice(start,start+220)+(content.length>start+220?'…':'')};
+  })});
+ }
+ if(path[0]==='shares'){
+  if(path.length===1&&req.method==='GET')return json({shares:(await sql.prepare('SELECT id,token,title,conversation_id,created_at FROM public_shares WHERE user_id=? ORDER BY created_at DESC').bind(owner).all()).results});
+  if(path.length===1&&req.method==='POST'){
+   const body=await req.json() as {conversationId?:unknown}|null;
+   if(!body||typeof body.conversationId!=='string'||body.conversationId.length>100)return json({error:'A valid conversation is required.'},400);
+   const chat=await sql.prepare('SELECT id,title FROM conversations WHERE id=? AND user_id=?').bind(body.conversationId,owner).first<{id:string;title:string}>();
+   if(!chat)return json({error:'Conversation not found.'},404);
+   const messages=(await sql.prepare('SELECT role,content,model,created_at FROM messages WHERE conversation_id=? ORDER BY created_at,id').bind(chat.id).all<{role:string;content:string;model:string|null;created_at:number}>()).results;
+   if(!messages.length)return json({error:'Send a message before sharing this conversation.'},400);
+   const snapshot=JSON.stringify(messages.map(message=>({...message,content:publicMessageContent(message.content)})));
+   if(new TextEncoder().encode(snapshot).length>1000000)return json({error:'This conversation is too large to share. Create a shorter conversation.'},400);
+   const id=uid(),token=Array.from(crypto.getRandomValues(new Uint8Array(32)),byte=>byte.toString(16).padStart(2,'0')).join('');
+   const created=await sql.prepare('INSERT INTO public_shares (id,user_id,conversation_id,token,title,snapshot,created_at) SELECT ?,?,?,?,?,?,? WHERE (SELECT COUNT(*) FROM public_shares WHERE user_id=?)<100 RETURNING id').bind(id,owner,chat.id,token,chat.title,snapshot,Date.now(),owner).first<{id:string}>();
+   if(!created)return json({error:'Revoke an existing link before creating more than 100 public links.'},400);
+   return json({id,token,url:new URL('/share/'+token,req.url).href},201);
+  }
+  if(path.length===2&&req.method==='DELETE'){
+   const share=await sql.prepare('SELECT id FROM public_shares WHERE id=? AND user_id=?').bind(path[1],owner).first();
+   if(!share)return json({error:'Shared conversation not found.'},404);
+   await sql.prepare('DELETE FROM public_shares WHERE id=? AND user_id=?').bind(path[1],owner).run();
+   return json({ok:true});
+  }
+ }
  if(path[0]==='billing'&&req.method==='GET')return json(await billingOverview(sql,owner));
  if(path[0]==='payments'&&req.method==='POST')return json(await paymentRequest(req,sql,owner,path));
  if(path.join('/')==='admin/billing'){
@@ -49,7 +94,7 @@ async function handle(req:Request){
   if(await sql.prepare("SELECT id FROM usage WHERE user_id=? AND status='pending'").bind(owner).first())return json({error:'진행 중인 응답이 끝난 뒤 삭제해주세요.'},409);
   const owned=(await sql.prepare('SELECT key FROM files WHERE user_id=?').bind(owner).all<{key:string}>()).results;
   for(const file of owned)await env.BUCKET?.delete(file.key);
-  await sql.batch([sql.prepare('DELETE FROM files WHERE user_id=?').bind(owner),sql.prepare('DELETE FROM messages WHERE conversation_id IN (SELECT id FROM conversations WHERE user_id=?)').bind(owner),sql.prepare('DELETE FROM conversations WHERE user_id=?').bind(owner)]);
+  await sql.batch([sql.prepare('DELETE FROM public_shares WHERE user_id=?').bind(owner),sql.prepare('DELETE FROM workspace_settings WHERE user_id=?').bind(owner),sql.prepare('DELETE FROM files WHERE user_id=?').bind(owner),sql.prepare('DELETE FROM messages WHERE conversation_id IN (SELECT id FROM conversations WHERE user_id=?)').bind(owner),sql.prepare('DELETE FROM conversations WHERE user_id=?').bind(owner)]);
   return json({ok:true,message:'대화와 파일을 삭제했습니다. 결제·사용량 원장은 정산을 위해 보존됩니다. ChatGPT 계정은 삭제되지 않습니다.'});
  }
  if(path[0]==='conversations'){
@@ -90,6 +135,8 @@ async function handle(req:Request){
   if(Number(req.headers.get('content-length')||0)>100000)return json({error:'Request is too large.'},413);
   const body:any=await req.json(),model=findModel(body.model);
   if(!model||typeof body.prompt!=='string'||!body.prompt.trim()||body.prompt.length>32000)return json({error:'Choose a valid model and enter a prompt under 32,000 characters.'},400);
+  if(body.workspaceMode!==undefined&&body.workspaceMode!=='chat'&&body.workspaceMode!=='work')return json({error:'Choose chat or work mode.'},400);
+  if(body.skillId!==undefined&&(typeof body.skillId!=='string'||!body.skillId||body.skillId.length>100))return json({error:'Select a valid saved skill.'},400);
   const effort=body.effort||'medium';if(model.efforts.length&&!model.efforts.includes(effort))return json({error:'This reasoning level is not supported by the selected model.'},400);
   const secret=PROVIDERS[model.provider].secret;const key=env[secret as keyof typeof env] as string|undefined;
   if(!key)return json({error:PROVIDERS[model.provider].name+' is not connected yet. Configure '+secret+' as a server secret to enable real responses.',code:'PROVIDER_NOT_CONFIGURED',provider:model.provider},503);
@@ -110,11 +157,14 @@ async function handle(req:Request){
   try{
    for(const id of body.fileIds||[]){const file:any=await sql.prepare('SELECT * FROM files WHERE id=? AND user_id=?').bind(id,owner).first();if(!file)throw new Error('An attached file is no longer available.');const object=await env.BUCKET?.get(file.key);if(!object)throw new Error('An attached file could not be read.');prompt+='\n\n<attached_document name='+JSON.stringify(file.name)+'>\n'+await object.text()+'\n</attached_document>';}
    const history=(await sql.prepare('SELECT role,content FROM messages WHERE conversation_id=? ORDER BY created_at DESC,id DESC LIMIT 40').bind(conversationId).all<Turn>()).results.reverse();
-   if(history.reduce((n,t)=>n+t.content.length,0)+prompt.length>240000)throw new Error('This conversation is too long. Start a new chat or use smaller documents.');
+   const settings=await getWorkspaceSettings(sql,owner);
+   const providerPrompt=withWorkspaceContext(prompt,settings,body.workspaceMode||'chat',body.skillId);
+   const providerTurns:Turn[]=[...history,{role:'user',content:providerPrompt}];
+   if(providerTurns.reduce((n,t)=>n+t.content.length,0)>240000)throw new Error('This conversation is too long. Start a new chat or use smaller documents.');
    // UTF-8 byte count bounds text tokens conservatively. Pro mode has no
    // separately approved rate, so it cannot borrow the standard tariff.
    if(body.pro)throw new BillingError('Pro 모드 단가는 별도 확정 전까지 사용할 수 없습니다.',503);
-   const inputBound=new TextEncoder().encode([...history,{role:'user',content:prompt}].map(t=>t.content).join('')).length+4096;
+   const inputBound=new TextEncoder().encode(providerTurns.map(t=>t.content).join('')).length+4096;
    if(beta&&inputBound>BETA_INPUT_BYTES+4096)throw new BillingError('Beta conversations support up to 16 KB of total text. Start a new conversation or use a smaller document.',400);
    reservation=beta?await reserveBeta(sql,owner,requestId,inputBound,now):cost(rate,inputBound,8192);
    if(!beta)await reserve(sql,owner,requestId,reservation);
@@ -130,7 +180,7 @@ async function handle(req:Request){
      try{
       emit({type:'start',conversationId,model:model.id});
       providerStarted=true;
-      const measured=await invokeProvider(model,key,[...history,{role:'user',content:prompt}],effort,false,aborter.signal,delta=>{text+=delta;emit({type:'delta',text:delta});},beta?BETA_OUTPUT:8192);
+      const measured=await invokeProvider(model,key,providerTurns,effort,false,aborter.signal,delta=>{text+=delta;emit({type:'delta',text:delta});},beta?BETA_OUTPUT:8192);
       if(beta){const charge=betaCost(measured.input,measured.output);if(charge>reservation)throw new Error('Provider usage exceeded the reserved beta allowance.');await sql.prepare('UPDATE usage SET reserved_amount=? WHERE id=? AND user_id=?').bind(charge,requestId,owner).run();}else await settle(sql,owner,requestId,reservation,cost(rate,measured.input,measured.output));
       if(!text.trim())throw new Error('The provider returned no text.');
       const ended=Date.now();
@@ -147,8 +197,9 @@ async function handle(req:Request){
 }
 async function dispatch(req:Request){try{
  if(req.method!=='GET'&&req.body){
+  const maxBytes=req.method==='PATCH'&&new URL(req.url).pathname==='/api/settings'?600000:200000;
   const reader=req.clone().body!.getReader();let bytes=0;
-  while(true){const part=await reader.read();if(part.done)break;bytes+=part.value.byteLength;if(bytes>200000){void reader.cancel();return json({error:'Request is too large.'},413);}}
+  while(true){const part=await reader.read();if(part.done)break;bytes+=part.value.byteLength;if(bytes>maxBytes){void reader.cancel();return json({error:'Request is too large.'},413);}}
  }
  return await handle(req);
 }catch(e){if(e instanceof BillingError)return json({error:e.message},e.status);if(e instanceof SyntaxError)return json({error:'Invalid JSON request.'},400);return json({error:'The request could not be completed. Please retry.'},500);}}
