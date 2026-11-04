@@ -1,0 +1,317 @@
+/* Composer tool states measured from the supplied Korean desktop captures. */
+.gemini-shell .gemini-composer[data-expanded='true'] {
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  grid-template-rows: minmax(40px, auto) 36px;
+  column-gap: 8px;
+  row-gap: 0;
+  min-height: 100px;
+  padding: 12px;
+  border-radius: 32px;
+}
+.gemini-shell .gemini-composer[data-expanded='true'] textarea.gemini-prompt {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  min-height: 40px;
+  padding: 8px 12px;
+}
+.gemini-shell .gemini-composer[data-expanded='true'] .gemini-add {
+  grid-column: 1;
+  grid-row: 2;
+}
+.gemini-shell .gemini-composer[data-expanded='true'] .gemini-composer-actions {
+  grid-column: 3;
+  grid-row: 2;
+}
+.gemini-shell .gemini-tool-chip {
+  display: inline-flex;
+  grid-column: 2;
+  grid-row: 2;
+  align-items: center;
+  justify-self: start;
+  gap: 8px;
+  width: max-content;
+  max-width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--prism-selected);
+  color: var(--prism-ink);
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: background-color 140ms ease;
+}
+.gemini-shell .gemini-tool-chip > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.gemini-shell .gemini-tool-chip-symbol {
+  display: grid;
+  place-items: center;
+  flex: 0 0 19px;
+  width: 19px;
+  height: 20px;
+}
+.gemini-shell .gemini-tool-chip-symbol > svg {
+  grid-area: 1 / 1;
+  transition: opacity 100ms ease;
+}
+.gemini-shell .gemini-tool-chip-remove { opacity: 0; }
+.gemini-shell .gemini-tool-chip:not(:disabled):is(:hover, :focus-visible) { background: var(--prism-hover); }
+.gemini-shell .gemini-tool-chip:not(:disabled):is(:hover, :focus-visible) .gemini-tool-chip-icon { opacity: 0; }
+.gemini-shell .gemini-tool-chip:not(:disabled):is(:hover, :focus-visible) .gemini-tool-chip-remove { opacity: 1; }
+.gemini-shell .gemini-tool-chip:disabled { opacity: .65; }
+.gemini-shell .gemini-composer:is([data-tool='research'], [data-tool='video']) {
+  min-height: 150px;
+  grid-template-rows: minmax(40px, auto) 36px auto;
+}
+.gemini-shell .gemini-tool-options {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-row: 3;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+.gemini-shell .gemini-option-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  margin: 0;
+  padding: 5px 12px;
+  border: 1px solid var(--prism-border);
+  border-radius: 999px;
+  color: var(--prism-ink);
+  background: transparent;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 400;
+}
+.gemini-shell .gemini-option-button:not(:disabled):hover,
+.gemini-shell .gemini-option-button[data-state='open'] { background: var(--prism-hover); }
+.gemini-shell .gemini-option-button:disabled { opacity: .45; cursor: not-allowed; }
+.gemini-shell .gemini-source-active { width: 5px; height: 5px; border-radius: 50%; background: var(--prism-accent); }
+.gemini-shell .gemini-media-model {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-inline: 8px;
+  min-height: 32px;
+  color: var(--prism-muted);
+  font-size: 14px;
+  line-height: 20px;
+  white-space: nowrap;
+}
+.gemini-shell .gemini-capability-note {
+  margin: 12px 16px 0;
+  color: var(--prism-muted);
+  font-size: 12px;
+  line-height: 20px;
+  text-align: center;
+  text-wrap: pretty;
+}
+.gemini-shell .gemini-capability-note > button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--prism-accent);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.prism-composer-live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  border: 0;
+  white-space: nowrap;
+}
+
+.prism-tool-menu.prism-composer-menu {
+  min-width: 248px;
+  width: 248px;
+  padding: 8px;
+  border: 0;
+  border-radius: 20px;
+}
+.prism-composer-menu .prism-tool-item {
+  min-height: 36px;
+  padding: 7px 12px;
+  gap: 10px;
+  border-radius: 16px;
+}
+.prism-composer-menu .prism-menu-divider { margin: 9px 8px; }
+.prism-tool-chevron, .prism-tool-check { margin-left: auto; flex-shrink: 0; }
+.prism-tool-availability { margin-left: auto; font-size: 10px; color: var(--prism-muted); }
+.prism-tool-menu.prism-composer-more-menu {
+  min-width: 158px;
+  width: 158px;
+  padding: 4px;
+  border: 0;
+  border-radius: 16px;
+}
+.prism-composer-more-menu .prism-tool-item {
+  min-height: 28px;
+  padding: 4px 8px;
+  gap: 8px;
+  border-radius: 12px;
+  font-size: 12px;
+  line-height: 20px;
+}
+.prism-tool-menu.prism-composer-upload-menu { width: 288px; border: 0; }
+.prism-tool-section-label {
+  display: block;
+  padding: 8px 12px 4px;
+  color: var(--prism-muted);
+  font-size: 11px;
+  line-height: 18px;
+}
+.prism-tool-menu.prism-source-popover { width: 320px; padding: 12px; border: 0; }
+.prism-source-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 4px 8px 8px;
+}
+.prism-source-heading > strong { font-size: 15px; font-weight: 500; }
+.prism-source-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 8px;
+  color: var(--prism-ink);
+  font-size: 14px;
+  line-height: 20px;
+}
+.prism-source-row > svg { flex-shrink: 0; }
+.prism-source-row > span { flex: 1; min-width: 0; }
+.prism-source-row strong { display: block; font-size: 14px; font-weight: 400; }
+.prism-source-row small { display: block; margin-top: 4px; color: var(--prism-muted); font-size: 12px; line-height: 18px; }
+.prism-source-row input { width: 17px; height: 17px; margin: 0; accent-color: var(--prism-accent); }
+.prism-source-row:has(input:disabled) { opacity: .7; }
+.prism-source-note { margin: 4px 8px 8px; color: var(--prism-muted); font-size: 12px; line-height: 20px; }
+.prism-tool-menu.prism-aspect-menu { min-width: 180px; width: 180px; border: 0; }
+.prism-composer-menu, .prism-composer-more-menu, .prism-composer-upload-menu,
+.prism-source-popover, .prism-aspect-menu {
+  animation: prism-composer-menu-in 140ms cubic-bezier(.2, .8, .2, 1);
+}
+.prism-source-popover :is(button, input):focus-visible {
+  outline: 2px solid var(--prism-accent);
+  outline-offset: 3px;
+}
+
+.prism-image-notice-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgb(0 0 0 / 55%);
+  animation: prism-composer-overlay-in 140ms ease;
+}
+.prism-image-notice {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: 101;
+  width: min(512px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  padding: 24px;
+  overflow-y: auto;
+  transform: translate(-50%, -50%);
+  border: 0;
+  border-radius: 28px;
+  background: var(--prism-surface, #1f1f1f);
+  color: var(--prism-ink, #e3e3e3);
+  box-shadow: 0 16px 70px rgb(0 0 0 / 20%);
+  font-family: 'Google Sans Flex', 'Google Sans', Arial, 'Noto Sans KR', sans-serif;
+  animation: prism-image-notice-in 140ms cubic-bezier(.2, .8, .2, 1);
+}
+.prism-image-notice > h2 {
+  margin: 0 0 18px;
+  font-size: 20px;
+  line-height: 28px;
+  font-weight: 500;
+}
+.prism-image-notice > p {
+  margin: 0;
+  color: var(--prism-ink, #e3e3e3);
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 400;
+}
+.prism-image-notice-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 20px;
+}
+.prism-image-notice-actions > button {
+  min-height: 36px;
+  padding: 6px 12px;
+  border: 0;
+  border-radius: 999px;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 24px;
+  cursor: pointer;
+}
+.prism-image-notice-cancel { background: transparent; color: var(--prism-ink, #e3e3e3); }
+.prism-image-notice-cancel:hover { background: var(--prism-hover); }
+.prism-image-notice-confirm { background: #4146a4; color: #fff; }
+.prism-image-notice-confirm:hover { background: #5056b8; }
+.prism-image-notice button:focus-visible { outline: 2px solid var(--prism-accent); outline-offset: 3px; }
+
+@keyframes prism-composer-menu-in {
+  from { opacity: 0; transform: translateY(4px) scale(.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes prism-composer-overlay-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes prism-image-notice-in {
+  from { opacity: 0; transform: translate(-50%, calc(-50% + 4px)) scale(.98); }
+  to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+@media (max-width: 767px) {
+  .gemini-shell .gemini-composer[data-expanded='true'] {
+    grid-template-columns: 32px minmax(0, 1fr) auto;
+    column-gap: 4px;
+    padding: 10px 8px;
+    border-radius: 28px;
+  }
+  .gemini-shell .gemini-composer[data-expanded='true'] textarea.gemini-prompt { padding-inline: 12px; }
+  .gemini-shell .gemini-tool-chip { gap: 6px; padding: 0 10px; font-size: 13px; }
+  .gemini-shell .gemini-tool-chip-symbol { flex-basis: 17px; width: 17px; }
+  .gemini-shell .gemini-tool-chip-symbol > svg { width: 17px; height: 17px; }
+  .gemini-shell .gemini-media-model { gap: 4px; padding-inline: 6px; font-size: 12px; }
+  .gemini-shell .gemini-tool-options { gap: 8px; margin-top: 10px; }
+  .gemini-shell .gemini-option-button { min-height: 36px; font-size: 13px; }
+  .gemini-shell .gemini-capability-note { margin-inline: 8px; }
+  .prism-image-notice { padding: 24px; }
+}
+@media (max-width: 420px) {
+  .gemini-shell .gemini-composer[data-tool='research'] .gemini-model-trigger { max-width: 86px; }
+  .gemini-shell .gemini-composer[data-expanded='true'] .gemini-tool-chip { max-width: min(100%, 148px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .prism-composer-menu, .prism-composer-more-menu, .prism-composer-upload-menu,
+  .prism-source-popover, .prism-aspect-menu, .prism-image-notice-overlay, .prism-image-notice { animation: none; }
+  .gemini-shell .gemini-tool-chip, .gemini-shell .gemini-tool-chip-symbol > svg { transition: none; }
+}
+@media print {
+  .prism-image-notice-overlay, .prism-image-notice, .prism-tool-menu { display: none !important; }
+}

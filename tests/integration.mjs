@@ -12,10 +12,10 @@ function prepare(query){let params=[];return {bind(...values){params=values;retu
 const env={DB:{prepare,async batch(items){sqlite.exec('BEGIN');try{const out=[];for(const item of items)out.push(await item.run());sqlite.exec('COMMIT');return out;}catch(e){sqlite.exec('ROLLBACK');throw e;}}},BUCKET:{async put(key,value){bucket.set(key,value)},async get(key){return bucket.has(key)?{text:async()=>bucket.get(key)}:null},async delete(key){bucket.delete(key)}}};
 globalThis.__prismTest={env,getUser:async()=>user};
 await writeFile(new URL('context.mjs',dir),'export const env=globalThis.__prismTest.env; export const getChatGPTUser=globalThis.__prismTest.getUser;');
-for(const [source,dest] of [['lib/models.ts','models.mjs'],['lib/provider.ts','provider.mjs'],['lib/billing.ts','billing.mjs'],['lib/beta.ts','beta.mjs'],['lib/workspace-settings.ts','workspace-settings.mjs'],['app/api/[...path]/route.ts','route.mjs']]){
+for(const [source,dest] of [['lib/models.ts','models.mjs'],['lib/provider.ts','provider.mjs'],['lib/billing.ts','billing.mjs'],['lib/beta.ts','beta.mjs'],['lib/workspace-settings.ts','workspace-settings.mjs'],['lib/workspace-tools.ts','workspace-tools.mjs'],['app/api/[...path]/route.ts','route.mjs']]){
  let code=await readFile(new URL('../'+source,import.meta.url),'utf8');
  code=code.replaceAll("'cloudflare:workers'","'./context.mjs'").replaceAll("'../../chatgpt-auth'","'./context.mjs'").replaceAll("'../../../lib/models'","'./models.mjs'").replaceAll("'../../../lib/provider'","'./provider.mjs'");
- code=code.replaceAll("'../../../lib/workspace-settings'","'./workspace-settings.mjs'").replaceAll("'../../../lib/billing'","'./billing.mjs'").replaceAll("'./models'","'./models.mjs'").replaceAll("'../../../lib/beta'","'./beta.mjs'").replaceAll("'./billing'","'./billing.mjs'");
+ code=code.replaceAll("'../../../lib/workspace-tools'","'./workspace-tools.mjs'").replaceAll("'../../../lib/workspace-settings'","'./workspace-settings.mjs'").replaceAll("'../../../lib/billing'","'./billing.mjs'").replaceAll("'./models'","'./models.mjs'").replaceAll("'../../../lib/beta'","'./beta.mjs'").replaceAll("'./billing'","'./billing.mjs'");
  const js=ts.transpileModule(code,{compilerOptions:{module:ts.ModuleKind.ESNext,target:ts.ScriptTarget.ES2022}}).outputText;
  await writeFile(new URL(dest,dir),js);
 }
@@ -45,10 +45,10 @@ test('truncated streams fail instead of being marked complete',async()=>{globalT
 
 test('workspace settings validate bounded input and remain isolated across owners',async()=>{
  sqlite.exec(await readFile(new URL('../drizzle/0003_workspace_settings_and_shares.sql',import.meta.url),'utf8'));
- const defaults={personalizationEnabled:false,customInstructions:'',memory:'',workResponseStyle:'plan-first',skills:[]};
+ const defaults={personalizationEnabled:false,customInstructions:'',memory:'',workResponseStyle:'plan-first',browserTarget:'current',browserPermission:'ask',skills:[]};
  assert.deepEqual(await(await call('settings')).json(),defaults);
  for(const invalid of [{personalizationEnabled:'yes'},{memory:'x'.repeat(8001)},{customInstructions:'x'.repeat(4001)},{workResponseStyle:'autonomous'},{unknown:true},{skills:[{id:'a',name:'A',instructions:'One'},{id:'a',name:'B',instructions:'Two'}]},{skills:Array.from({length:21},(_,i)=>({id:String(i),name:'Name',instructions:'Text'}))}])assert.equal((await call('settings','PATCH',invalid)).status,400);
- const prefs={personalizationEnabled:true,customInstructions:'Answer in clear Korean.',memory:'I work on solar research.',workResponseStyle:'direct',skills:[{id:'review',name:'Review',instructions:'Check assumptions and give a critique.'}]};
+ const prefs={...defaults,personalizationEnabled:true,customInstructions:'Answer in clear Korean.',memory:'I work on solar research.',workResponseStyle:'direct',skills:[{id:'review',name:'Review',instructions:'Check assumptions and give a critique.'}]};
  assert.deepEqual(await(await call('settings','PATCH',prefs)).json(),prefs);
  assert.equal((await call('settings','PATCH',{memory:'wrong'},{origin:'https://other.test'})).status,403);
  user={userId:'bob',email:'bob@example.test'};
@@ -58,6 +58,20 @@ test('workspace settings validate bounded input and remain isolated across owner
  assert.equal((await(await call('settings')).json()).memory,prefs.memory);
  await call('settings','PATCH',{workResponseStyle:'plan-first'});
  assert.equal((await(await call('settings')).json()).customInstructions,prefs.customInstructions);
+});
+test('browser preferences are separate owner-scoped fields and cannot enable remote execution',async()=>{
+ const before=await(await call('settings')).json();
+ for(const patch of [{browserTarget:'system'},{browserTarget:true},{browserPermission:'always'},{browserPermission:null}])assert.equal((await call('settings','PATCH',patch)).status,400);
+ const remote=await(await call('settings','PATCH',{browserTarget:'remote'})).json();
+ assert.equal(remote.browserTarget,'remote');assert.equal(remote.browserPermission,'ask');
+ const approved=await(await call('settings','PATCH',{browserPermission:'approve'})).json();
+ assert.equal(approved.browserTarget,'remote');assert.equal(approved.browserPermission,'approve');assert.equal(approved.memory,before.memory);
+ assert.equal((await(await call('bootstrap')).json()).capabilities.remoteBrowser,false);
+ user={userId:'bob',email:'bob@example.test'};
+ const other=await(await call('settings')).json();assert.equal(other.browserTarget,'current');assert.equal(other.browserPermission,'ask');
+ user={userId:'alice',email:'alice@example.test'};
+ assert.equal((await(await call('settings')).json()).browserPermission,'approve');
+ await call('settings','PATCH',{browserTarget:'current',browserPermission:'ask'});
 });
 test('fresh owner settings and selected skills affect provider input without polluting stored messages',async()=>{
  let providerInput='';
@@ -123,7 +137,7 @@ test('settings accept maximum valid escaped text while retaining scoped request 
  user={userId:'large-settings',email:'large-settings@example.test'};
  try{
   const escaped='\u0001';
-  const settings={personalizationEnabled:true,customInstructions:escaped.repeat(4000),memory:escaped.repeat(8000),workResponseStyle:'plan-first',skills:Array.from({length:20},(_,i)=>({id:'skill-'+i,name:escaped.repeat(60),instructions:escaped.repeat(4000)}))};
+  const settings={personalizationEnabled:true,customInstructions:escaped.repeat(4000),memory:escaped.repeat(8000),workResponseStyle:'plan-first',browserTarget:'current',browserPermission:'ask',skills:Array.from({length:20},(_,i)=>({id:'skill-'+i,name:escaped.repeat(60),instructions:escaped.repeat(4000)}))};
   const bytes=Buffer.byteLength(JSON.stringify(settings));assert.ok(bytes>500000&&bytes<600000);
   const saved=await call('settings','PATCH',settings);assert.equal(saved.status,200);assert.deepEqual(await saved.json(),settings);
   const oversized=new Request('https://prism.test/api/settings',{method:'PATCH',body:' '.repeat(600001)});
@@ -152,6 +166,113 @@ test('concurrent public share creation cannot exceed the owner limit',async()=>{
  }finally{
   sqlite.prepare('DELETE FROM conversations WHERE id=?').run('share-cap-chat');
   user={userId:'alice',email:'alice@example.test'};
+ }
+});
+test('invalid and unavailable tool requests cannot call providers, reserve allowances, or create conversations',async()=>{
+ const priorUser=user,priorBeta=env.BETA_MODE,priorKey=env.OPENAI_API_KEY;
+ let providerCalls=0;
+ try{
+  user={userId:'tool-validation',email:'tool-validation@example.test'};env.BETA_MODE='true';env.OPENAI_API_KEY='test-only-key';
+  globalThis.fetch=async()=>{providerCalls++;throw new Error('The provider must not be called.');};
+  const base={model:'gpt-6.1-sol',prompt:'A request'};
+  for(const [fields,status,code] of [
+   [{tool:'shell'},400,'INVALID_TOOL'],[{tool:null},400,'INVALID_TOOL'],
+   [{tool:'research',researchSources:{web:'yes'}},400,'INVALID_RESEARCH_SOURCES'],
+   [{tool:'research',researchSources:{web:false,privateSource:'unexpected'}},400,'INVALID_RESEARCH_SOURCES'],
+   [{tool:'research',researchSources:null},400,'INVALID_RESEARCH_SOURCES'],
+   [{tool:'research',researchSources:{web:true}},503,'WEB_RESEARCH_NOT_CONFIGURED'],
+   [{tool:'image'},503,'IMAGE_GENERATION_NOT_CONFIGURED'],[{tool:'video'},503,'VIDEO_GENERATION_NOT_CONFIGURED'],
+  ]){
+   const response=await call('chat','POST',{...base,...fields});assert.equal(response.status,status);assert.equal((await response.json()).code,code);
+  }
+  for(const body of ['null','[]','true'])assert.equal((await route.POST(new Request('https://prism.test/api/chat',{method:'POST',body}))).status,400);
+  assert.equal(providerCalls,0);
+  assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM usage WHERE user_id=?').get(user.userId).n,0);
+  assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM conversations WHERE user_id=?').get(user.userId).n,0);
+  assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM rate_limits WHERE key LIKE ?').get(user.userId+':%').n,0);
+  assert.equal(await billing.balance(env.DB,user.userId),0);
+  const boot=await(await call('bootstrap')).json();assert.deepEqual(boot.capabilities,{webResearch:false,image:false,video:false,remoteBrowser:false});
+  user=null;assert.equal((await call('chat','POST',{...base,tool:'canvas'})).status,401);
+ }finally{
+  user=priorUser;if(priorBeta===undefined)delete env.BETA_MODE;else env.BETA_MODE=priorBeta;if(priorKey===undefined)delete env.OPENAI_API_KEY;else env.OPENAI_API_KEY=priorKey;globalThis.fetch=originalFetch;
+ }
+});
+test('Canvas, learning, and source research use actual provider output with normal persistence and beta metering',async()=>{
+ const priorUser=user,priorBeta=env.BETA_MODE,priorKey=env.OPENAI_API_KEY;
+ let providerInput='',providerCalls=0;
+ try{
+  user={userId:'tool-inference',email:'tool-inference@example.test'};env.BETA_MODE='true';env.OPENAI_API_KEY='test-only-key';
+  globalThis.fetch=async(url,options)=>{
+   providerCalls++;assert.equal(url,'https://api.openai.com/v1/responses');
+   const body=JSON.parse(options.body);providerInput=body.input.at(-1).content;assert.equal(body.max_output_tokens,1024);assert.equal(body.store,false);assert.equal(body.tools,undefined);
+   return mockSSE([{type:'response.output_text.delta',delta:'A provider-generated result.'},{type:'response.completed',response:{usage:{input_tokens:30,output_tokens:10}}}]);
+  };
+  const form=new FormData();form.set('file',new File(['Confirmed finding: the study involved 12 participants.'],'study-notes.txt'));
+  const uploaded=await call('files','POST',form);assert.equal(uploaded.status,200);const file=await uploaded.json();
+  for(const [tool,instruction] of [['canvas',/complete, editable draft/],['learning',/check-for-understanding/],['research',/NO web search/]]){
+   const prompt='Work with my supplied evidence.';
+   const response=await call('chat','POST',{model:'gpt-6.1-sol',prompt,tool,researchSources:{web:false},...(tool==='research'?{fileIds:[file.id]}:{})});
+   assert.equal(response.status,200);
+   const events=(await response.text()).split('\n').filter(line=>line.startsWith('data: ')).map(line=>JSON.parse(line.slice(6)));
+   const start=events.find(event=>event.type==='start'),done=events.find(event=>event.type==='done');
+   assert.equal(start.tool,tool);assert.equal(done?.tool,tool);assert.match(providerInput,instruction);
+   const detail=await(await call('conversations/'+start.conversationId)).json();
+   assert.deepEqual(detail.messages.map(message=>message.role),['user','assistant']);
+   assert.ok(detail.messages[1].created_at>detail.messages[0].created_at,'assistant output must follow its user message');
+   assert.equal(detail.messages[1].content,'A provider-generated result.');assert.doesNotMatch(detail.messages[0].content,/The user selected/);
+   if(tool==='research'){assert.match(providerInput,/study-notes\.txt/);assert.match(providerInput,/12 participants/);assert.match(providerInput,/never invent source URLs/);}else assert.equal(detail.messages[0].content,prompt);
+  }
+  assert.equal(providerCalls,3);
+  assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM usage WHERE user_id=? AND status='complete' AND rate_snapshot='beta:v1'").get(user.userId).n,3);
+  assert.equal(await billing.balance(env.DB,user.userId),0);
+  assert.equal((await call('files/'+file.id,'DELETE')).status,200);
+ }finally{
+  user=priorUser;if(priorBeta===undefined)delete env.BETA_MODE;else env.BETA_MODE=priorBeta;if(priorKey===undefined)delete env.OPENAI_API_KEY;else env.OPENAI_API_KEY=priorKey;globalThis.fetch=originalFetch;
+ }
+});
+test('conversation chronology survives same-millisecond responses, clock rollback, and legacy timestamp ties',async()=>{
+ const priorUser=user,priorBeta=env.BETA_MODE,priorKey=env.OPENAI_API_KEY,originalNow=Date.now;
+ let clock=originalNow(),providerInputs=[];
+ try{
+  Date.now=()=>clock;
+  user={userId:'chronology-user',email:'chronology@example.test'};env.BETA_MODE='true';env.OPENAI_API_KEY='test-only-key';
+  globalThis.fetch=async(url,options)=>{
+   const turns=JSON.parse(options.body).input;providerInputs.push(turns);
+   for(const turn of turns)assert.deepEqual(Object.keys(turn).sort(),['content','role']);
+   return mockSSE([{type:'response.output_text.delta',delta:'Answer '+providerInputs.length},{type:'response.completed',response:{usage:{input_tokens:20,output_tokens:5}}}]);
+  };
+  const readEvents=async response=>{
+   assert.equal(response.status,200);
+   const events=(await response.text()).split('\n').filter(line=>line.startsWith('data: ')).map(line=>JSON.parse(line.slice(6)));
+   assert.ok(events.some(event=>event.type==='done'));return events;
+  };
+  const first=await readEvents(await call('chat','POST',{model:'gpt-6.1-sol',prompt:'Question 1'}));
+  const id=first.find(event=>event.type==='start').conversationId;
+  clock-=100;
+  await readEvents(await call('chat','POST',{model:'gpt-6.1-sol',prompt:'Question 2',conversationId:id}));
+  const detail=await(await call('conversations/'+id)).json();
+  assert.deepEqual(detail.messages.map(message=>message.role),['user','assistant','user','assistant']);
+  assert.deepEqual(detail.messages.map(message=>message.content),['Question 1','Answer 1','Question 2','Answer 2']);
+  for(let i=1;i<detail.messages.length;i++)assert.ok(detail.messages[i].created_at>detail.messages[i-1].created_at);
+  assert.equal(detail.conversation.updated_at,detail.messages.at(-1).created_at);
+  assert.deepEqual(providerInputs[1].map(turn=>turn.content),['Question 1','Answer 1','Question 2']);
+  const published=await(await call('shares','POST',{conversationId:id})).json();
+  const shared=await(await call('public-shares/'+published.token)).json();
+  assert.deepEqual(shared.messages.map(message=>message.content),detail.messages.map(message=>message.content));
+
+  // Earlier releases stored random IDs with equal times; their insert order is
+  // authoritative. Deliberately make lexical ID order contradict chronology.
+  sqlite.prepare('INSERT INTO conversations VALUES (?,?,?,?,?,?)').run('legacy-time-tie',user.userId,'Legacy','gpt-6.1-sol',clock,clock);
+  sqlite.prepare('INSERT INTO messages VALUES (?,?,?,?,?,?)').run('z-legacy-question','legacy-time-tie','user','Legacy question',null,clock);
+  sqlite.prepare('INSERT INTO messages VALUES (?,?,?,?,?,?)').run('a-legacy-answer','legacy-time-tie','assistant','Legacy answer','gpt-6.1-sol',clock);
+  assert.deepEqual((await(await call('conversations/legacy-time-tie')).json()).messages.map(message=>message.role),['user','assistant']);
+  await readEvents(await call('chat','POST',{model:'gpt-6.1-sol',prompt:'Continue legacy',conversationId:'legacy-time-tie'}));
+  assert.deepEqual(providerInputs[2].map(turn=>turn.content),['Legacy question','Legacy answer','Continue legacy']);
+  const legacy=await(await call('conversations/legacy-time-tie')).json();
+  assert.deepEqual(legacy.messages.map(message=>message.role),['user','assistant','user','assistant']);
+  assert.ok(legacy.messages[2].created_at>legacy.messages[1].created_at);assert.ok(legacy.messages[3].created_at>legacy.messages[2].created_at);
+ }finally{
+  Date.now=originalNow;user=priorUser;if(priorBeta===undefined)delete env.BETA_MODE;else env.BETA_MODE=priorBeta;if(priorKey===undefined)delete env.OPENAI_API_KEY;else env.OPENAI_API_KEY=priorKey;globalThis.fetch=originalFetch;
  }
 });
 test('rate limiting is enforced per authenticated user',async()=>{sqlite.prepare('INSERT INTO rate_limits (key,count,expires_at) VALUES (?,20,?) ON CONFLICT(key) DO UPDATE SET count=20').run('alice:'+Math.floor(Date.now()/60000),Date.now()+120000);assert.equal((await call('chat','POST',{model:'gpt-6-astra',prompt:'Excess'})).status,429);globalThis.fetch=originalFetch;delete env.OPENAI_API_KEY;});

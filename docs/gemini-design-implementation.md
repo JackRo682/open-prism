@@ -2,7 +2,7 @@
 
 ## Scope and platform
 
-This change applies the two supplied Gemini screenshots to **Open Prism**, preserving its authentication, provider adapters, storage, quota enforcement, and model availability rules. Styling is an independent reproduction of the supplied references. Gemini's private backend and application source are not used.
+This change applies the supplied Gemini desktop screenshots, including all 12 JPG states in `Gemini-UI-screenshots-and-implementation.zip`, to **Open Prism**, preserving its authentication, provider adapters, storage, quota enforcement, and model availability rules. Styling is an independent reproduction of the supplied references. Gemini's private backend and application source are not used.
 
 | Project | Configuration evidence | Runtime |
 | --- | --- | --- |
@@ -13,7 +13,7 @@ GitHub discovery found nine accessible repositories under `JackRo682`; `open-pri
 
 ## Visual reference
 
-The attached home PNG is **1440 × 703**; the settings PNG is **1440 × 699**. The accompanying inspection notes describe a separate 1440 × 709 browser session.
+The earlier home/settings PNG references are 1440 × 703 and 1440 × 699. The additional ZIP contains 12 verified 1440 × 709 JPGs: home, settings, theme, primary tools, more tools, Canvas, Deep Research, Guided Learning, image acknowledgement, video composer, video introduction, and browser settings.
 
 | Element | Reference measurement or treatment |
 | --- | --- |
@@ -41,7 +41,11 @@ Original animation keyframes and a mobile reference were not supplied. The opaci
 | `components/workspace/composer.tsx` | Autosizing prompt, Korean IME-safe submission, model/reasoning selection, attachments, speech recognition, stop/send, and `@` skills. |
 | `components/workspace/chrome.tsx` | Prism mark, browser print/install actions, and Markdown notebook creation. |
 | `components/workspace/settings-menu.tsx` | Radix settings menu with Theme, Help, and Location submenus. |
-| `components/workspace/theme.tsx` | Theme persistence, system changes, and cross-tab updates. |
+| `components/workspace/theme.tsx`, `app/layout.tsx` | Cookie-initialized theme persistence, prepaint System resolution, and cross-tab updates. |
+| `components/workspace/composer-modes.css` | 248px primary menu, 158px more-tools submenu, 100px selected-tool composer, and 150px research/video composer. |
+| `components/workspace/browser-settings.tsx`, `browser-link-guard.tsx`, `browser-settings.css` | Reference-aligned browser settings, real account/local preferences, and external-link policy enforcement. |
+| `components/workspace/creative-workspace.tsx`, `creative-workspace.css` | Editable Canvas with real file saving, media entry screens, and accessible video introduction. |
+| `lib/workspace-tools.ts` | Capability declarations, validated tool requests, and provider mode instructions. |
 | `components/workspace/chat-search.tsx` | Debounced search, cancellation, keyboard navigation, and focus restoration. |
 | `components/workspace/settings-pages.tsx`, `settings.css` | Settings forms, skills, memory import, sharing, feedback, capability states, and portal styling. |
 | `lib/workspace-settings.ts` | Bounded validation, atomic patches, request-time context, and attachment omission in public snapshots. |
@@ -61,12 +65,13 @@ Original animation keyframes and a mobile reference were not supplied. The opaci
 | `/customize/skills` | Creates, edits, and deletes saved instructions; `@` selects a skill for a request. |
 | `/gems/view` | Directs users to saved skills. |
 | `/gemini-spark` | Persists plan-first or results-first Work preferences, applied to provider context. |
-| `/browser-settings` | Shows the current browser and unconnected remote-browser capability. |
+| `/browser-settings` | Flat 680px reference column; current/remote browser preference and ask/approve policy. Signed-in settings persist in D1; guest settings persist locally. Remote control/deletion remain disabled. External HTTP(S) anchor clicks honor the saved policy through a focus-managed confirmation dialog. |
 | `/import` | Copies a memory-export prompt, previews pasted text, and replaces memory after confirmation. Chat archive import is unavailable. |
 | `/sharing`, `/share/:token` | Owner-managed public snapshots and their public reader. |
 | `/usage`, `/billing`, `/settings` | Existing actual usage, account, provider, and beta/billing information. |
 | `/feedback` | Prefills a GitHub issue for user review and submission. |
-| `/images`, `/videos`, `/scheduled` | Explicit unavailable states; no media provider or scheduler is connected. |
+| `/images`, `/videos` | Reference-style media composers, image acknowledgement, and video introduction. Actual media generation is unavailable, clearly labeled, and blocked before provider/accounting writes. The video introduction uses decorative CSS illustrations; no sample gallery is presented as user-generated results. |
+| `/scheduled` | Existing explicit unavailable scheduler state. |
 | Microphone | Browser speech recognition when supported; requires the microphone action and browser permission. |
 | Save as PDF | Browser printing; the user chooses a PDF destination. |
 | App install | Available browser install prompt or installation guidance. |
@@ -86,9 +91,13 @@ Private endpoints use the authenticated Sites application user ID. Existing muta
 | `POST /api/shares` | `{ conversationId }` creates an owner-checked snapshot; returns `{ id, token, url }`. |
 | `DELETE /api/shares/:id` | Owner-checked revocation. |
 | `GET /api/public-shares/:token` | Public `{ title, created_at, messages }`; invalid/revoked tokens return 404. |
-| `POST /api/chat` | Existing fields plus `workspaceMode: 'chat'` or `'work'` and optional `skillId`. Resolves current settings and the owned skill on every request. |
+| `POST /api/chat` | Existing fields plus `workspaceMode: 'chat'` or `'work'` optional `skillId`, `tool` (`chat`, `canvas`, `research`, `learning`, `image`, `video`), and `researchSources: {web:boolean}`. Resolves current settings and the owned skill on every request. |
 
-Settings fields: `personalizationEnabled` (default false), `customInstructions` (up to 4,000 characters), `memory` (up to 8,000), `workResponseStyle` (`plan-first` or `direct`), and `skills` (up to 20; each name up to 60 characters and instructions up to 4,000).
+Tool modes preserve the user's draft and attachments. Canvas and Guided Learning use the actual text provider. Research with `web:false` analyzes only supplied material and instructs the provider to distinguish evidence from inference. Live web research and media requests return explicit 503 errors before rate-limit writes, usage reservations, or conversation creation. Bootstrap exposes `webResearch`, `image`, `video`, and `remoteBrowser` as false until those integrations are implemented. No background job is simulated.
+
+Canvas edits are retained by conversation in the parent workspace and recovered from owner-scoped session storage in the same tab. The editor is read-only while streaming or saving; saved state refers to the exact saved snapshot. Oversize revision requests are rejected with guidance rather than truncated. Conversation fetches are cancelled on navigation. New messages have monotonic timestamps under the conversation lock, and legacy equal-time rows use insertion order consistently in reads, provider history, and shares.
+
+Settings fields: `browserTarget` (`current` or `remote`, default `current`), `browserPermission` (`ask` or `approve`, default `ask`), `personalizationEnabled` (default false), `customInstructions` (up to 4,000 characters), `memory` (up to 8,000), `workResponseStyle` (`plan-first` or `direct`), and `skills` (up to 20; each name up to 60 characters and instructions up to 4,000).
 
 Personalization includes memory/instructions only while enabled. An explicitly selected skill applies independently. Preferences are added to the provider request without insertion into stored user messages. Plan-first and results-first Work choices both affect provider context and grant no external-action permissions.
 
@@ -107,6 +116,12 @@ node --test tests/integration.mjs
 pnpm build
 ```
 
-The **36 integration tests** use isolated SQLite and mocked provider transports. New coverage includes bounded owner-isolated settings, fresh preference/skill application, message-text search and wildcard escaping, public-snapshot ownership/redaction/revocation, the settings-only body-size budget, and concurrent public-link limits. Existing authentication, streaming persistence, uploads, quotas, and accounting checks are retained.
+The **40 integration tests** use isolated SQLite and mocked provider transports. New coverage includes bounded owner-isolated settings, fresh preference/skill application, message-text search and wildcard escaping, public-snapshot ownership/redaction/revocation, the settings-only body-size budget, and concurrent public-link limits. Additional coverage verifies tool mode requests, unavailable operations with no provider/accounting side effects, browser preference ownership, and deterministic conversation chronology with frozen/backward clocks. Existing authentication, streaming persistence, uploads, quotas, and accounting checks are retained.
 
 Use `pnpm dev` in a portable checkout. In managed Sites, use `sites-preview start <absolute-checkout>` and its exact returned URL. Build/package hosted releases through the Sites workflow from the pushed source commit. Live provider access and visual/interaction behavior require separate acceptance checks; automated transport tests use no live API credentials.
+
+## Acceptance limits for this release
+
+The interface keeps OpenPrism branding and actual configured model labels. Google Drive OAuth, image/video generation, live web research, and remote browser sessions require separate integrations and are not represented as working here. No new secrets, accounts, webhooks, or database migrations are required for these interface and supplied-document-tool changes.
+
+The managed preview service reported a healthy HTTP endpoint, but the cloud browser could not reach that endpoint. Production browser interaction verification is performed after publishing the built artifact; private live provider requests require an authenticated session and are separate from the isolated integration suite.

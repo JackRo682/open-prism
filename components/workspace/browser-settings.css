@@ -1,0 +1,311 @@
+/* Reference 15: a narrow settings column with flat rows and native controls. */
+.gemini-shell .gemini-workspace:has(.prism-browser-page)::before {
+  background: none;
+}
+
+.prism-browser-page {
+  box-sizing: border-box;
+  inline-size: min(100%, 728px);
+  margin-inline: auto;
+  padding: 0 24px 72px;
+  color: var(--prism-ink, #e3e3e3);
+  font: 400 16px / 1.5 Arial, 'Noto Sans KR', sans-serif;
+}
+
+.prism-browser-heading {
+  margin-block-end: 28px;
+}
+
+.prism-browser-heading h1 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 400;
+  line-height: 30px;
+}
+
+.prism-browser-page h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 400;
+  line-height: 26px;
+}
+
+.prism-browser-page p {
+  margin: 4px 0 0;
+  color: var(--prism-muted, #9aa0a6);
+  font-size: 16px;
+  line-height: 24px;
+  overflow-wrap: anywhere;
+}
+
+.prism-browser-options {
+  display: grid;
+  gap: 4px;
+  min-inline-size: 0;
+  margin: 18px 0 0;
+  padding: 0;
+  border: 0;
+}
+
+.prism-browser-option {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-items: center;
+  column-gap: 18px;
+  min-block-size: 74px;
+  padding: 10px 18px;
+  border-radius: 16px;
+  cursor: pointer;
+}
+
+.prism-browser-option > input {
+  appearance: none;
+  box-sizing: border-box;
+  inline-size: 20px;
+  block-size: 20px;
+  margin: 0;
+  border: 2px solid var(--prism-ink, #e3e3e3);
+  border-radius: 50%;
+  background: transparent;
+  cursor: inherit;
+}
+
+.prism-browser-option > input:checked {
+  background: var(--prism-ink, #e3e3e3);
+  box-shadow: inset 0 0 0 3px var(--prism-page, #0f0f0f);
+}
+
+.prism-browser-option > input:focus-visible {
+  outline: 2px solid var(--prism-accent, #a8c7fa);
+  outline-offset: 5px;
+}
+
+.prism-browser-option > span {
+  display: grid;
+  gap: 4px;
+  min-inline-size: 0;
+}
+
+.prism-browser-option strong {
+  font-size: 18px;
+  font-weight: 400;
+  line-height: 26px;
+}
+
+.prism-browser-option > span > span {
+  color: var(--prism-muted, #9aa0a6);
+  font-size: 16px;
+  line-height: 24px;
+  overflow-wrap: anywhere;
+}
+
+.prism-browser-option.is-unavailable,
+.prism-browser-options:disabled .prism-browser-option {
+  cursor: not-allowed;
+}
+
+.prism-browser-option.is-unavailable strong {
+  color: var(--prism-muted, #9aa0a6);
+}
+
+.prism-browser-option.is-unavailable > input,
+.prism-browser-options:disabled input {
+  opacity: .6;
+}
+
+.prism-browser-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 22px;
+  margin-block-start: 24px;
+}
+
+.prism-browser-select {
+  position: relative;
+  min-inline-size: 116px;
+  margin-block-start: -5px;
+}
+
+.prism-browser-select select {
+  appearance: none;
+  inline-size: 100%;
+  min-block-size: 36px;
+  padding: 7px 36px 7px 16px;
+  border: 0;
+  border-radius: 9999px;
+  background: var(--prism-hover, rgb(255 255 255 / 5%));
+  color: var(--prism-ink, #e3e3e3);
+  font: inherit;
+  font-size: 15px;
+  line-height: 22px;
+  cursor: pointer;
+}
+
+.prism-browser-select select:focus-visible {
+  outline: 2px solid var(--prism-accent, #a8c7fa);
+  outline-offset: 3px;
+}
+
+.prism-browser-select select:disabled {
+  opacity: .6;
+  cursor: not-allowed;
+}
+
+.prism-browser-select select option {
+  background: var(--prism-surface, #1f1f1f);
+  color: var(--prism-ink, #e3e3e3);
+}
+
+.prism-browser-select > svg {
+  position: absolute;
+  inset-block-start: 10px;
+  inset-inline-end: 13px;
+  pointer-events: none;
+}
+
+.prism-browser-data {
+  margin-block-start: 36px;
+}
+
+.prism-browser-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-block-size: 36px;
+  margin-block-start: -5px;
+  padding: 7px 13px;
+  border-radius: 9999px;
+  background: var(--prism-hover, rgb(255 255 255 / 5%));
+  color: var(--prism-ink, #e3e3e3);
+  font-size: 15px;
+  line-height: 22px;
+}
+
+.prism-browser-page .prism-browser-delete:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+
+.prism-browser-status {
+  min-block-size: 20px;
+  margin-block-start: 24px;
+}
+
+.prism-browser-status p,
+.prism-browser-error p {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.prism-browser-error p {
+  align-items: start;
+  color: var(--prism-danger, #f2b8b5);
+}
+
+.prism-browser-error p > svg {
+  margin-block-start: 2px;
+}
+
+.prism-browser-error button {
+  margin-block-start: 10px;
+  padding: 8px 14px;
+  border: 1px solid var(--prism-border, rgb(255 255 255 / 12%));
+  border-radius: 9999px;
+  font-size: 13px;
+}
+
+.prism-browser-error button:hover {
+  background: var(--prism-hover, rgb(255 255 255 / 8%));
+}
+
+.prism-browser-page .prism-browser-local-note {
+  margin-block-start: 8px;
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.prism-link-guard-dialog {
+  inline-size: min(512px, calc(100vw - 32px));
+  border-radius: 28px;
+}
+
+.prism-link-guard-icon {
+  color: var(--prism-accent, #a8c7fa);
+}
+
+.prism-link-guard-destination {
+  display: grid;
+  gap: 8px;
+  min-inline-size: 0;
+  max-block-size: 160px;
+  padding: 16px;
+  overflow-y: auto;
+  border: 1px solid var(--prism-border, rgb(255 255 255 / 12%));
+  border-radius: 16px;
+  background: var(--prism-page, #0f0f0f);
+  overflow-wrap: anywhere;
+}
+
+.prism-link-guard-destination strong {
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 22px;
+}
+
+.prism-link-guard-destination span {
+  color: var(--prism-muted, #9aa0a6);
+  font-size: 12px;
+  line-height: 20px;
+}
+
+@media (max-width: 767px) {
+  .prism-browser-page {
+    padding: 14px 24px 48px;
+  }
+
+  .prism-browser-heading {
+    margin-block-end: 28px;
+  }
+
+  .prism-browser-option {
+    align-items: start;
+    gap: 14px;
+    padding-inline: 4px;
+  }
+
+  .prism-browser-option > input {
+    margin-block-start: 4px;
+  }
+
+  .prism-browser-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 14px;
+  }
+
+  .prism-browser-select,
+  .prism-browser-delete {
+    justify-self: start;
+    margin-block-start: 0;
+  }
+
+  .prism-browser-select select,
+  .prism-browser-delete {
+    min-block-size: 44px;
+  }
+
+  .prism-browser-select > svg {
+    inset-block-start: 14px;
+  }
+}
+
+@media (forced-colors: active) {
+  .prism-browser-option > input {
+    appearance: auto;
+  }
+}

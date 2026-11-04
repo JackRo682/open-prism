@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Dialog, Switch } from 'radix-ui';
+import { BrowserSettingsPage } from './browser-settings';
 import {
   AlertCircle, ArrowLeft, ArrowUpRight, Check, ChevronRight, Clock3,
   Copy, Diamond, FileText, Globe2, Image, Link2,
@@ -149,19 +150,6 @@ function WorkPage({ onNotice }: Pick<SettingsPagesProps, 'onNotice'>) {
   </>;
 }
 
-function BrowserPage() {
-  const [browser, setBrowser] = useState('현재 브라우저');
-  useEffect(() => {
-    const ua = navigator.userAgent;
-    setBrowser(/Edg\//.test(ua) ? 'Microsoft Edge' : /Firefox\//.test(ua) ? 'Firefox' : /Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : '현재 브라우저');
-  }, []);
-  return <>
-    <section className="prism-setting-card"><div className="prism-setting-row"><div><h2>사용 중인 브라우저</h2><p>Prism의 링크는 현재 브라우저에서 열립니다.</p></div><span className="prism-status-pill">{browser}</span></div></section>
-    <section className="prism-setting-card"><div className="prism-setting-row"><div><h2>원격 브라우저</h2><p>브라우저 자동 조작 서비스가 연결되어 있지 않습니다. Prism이 대신 사이트에 로그인하거나 페이지를 조작하지 않습니다.</p></div><span className="prism-status-pill">연결 안 됨</span></div></section>
-    <section className="prism-setting-card"><h2>원격 브라우저 데이터</h2><p>원격 브라우저 세션을 생성하지 않으므로 삭제할 원격 검색 기록이나 쿠키가 없습니다. 현재 기기의 쿠키와 권한은 브라우저 설정에서 관리할 수 있습니다.</p></section>
-  </>;
-}
-
 function SkillsPage({ onNotice }: Pick<SettingsPagesProps, 'onNotice'>) {
   const { settings, error, saving, save, retry } = useSettings();
   const [editing, setEditing] = useState<Skill | null>(null);
@@ -264,13 +252,13 @@ export function UnavailableFeaturePage({ feature, onNavigate }: { feature: 'imag
 
 export function SettingsPages(props: SettingsPagesProps) {
   const { pathname, signedIn, onNavigate } = props;
+  if (pathname === '/browser-settings') return <BrowserSettingsPage signedIn={signedIn} onNotice={props.onNotice} />;
   const [title, description] = pageTitles[pathname] || ['공유한 대화', ''];
   const needsAccount = ['/personalization-settings', '/gemini-spark', '/customize/skills', '/import', '/sharing'].includes(pathname);
   let page: ReactNode;
   if (needsAccount && !signedIn) page = <SignInCard pathname={pathname} />;
   else if (pathname === '/personalization-settings') page = <PersonalizationPage onNavigate={onNavigate} onNotice={props.onNotice} />;
   else if (pathname === '/gemini-spark') page = <WorkPage onNotice={props.onNotice} />;
-  else if (pathname === '/browser-settings') page = <BrowserPage />;
   else if (pathname === '/customize/skills') page = <SkillsPage onNotice={props.onNotice} />;
   else if (pathname === '/gems/view') page = <section className="prism-setting-card prism-capability-state"><Diamond size={32} /><h2>맞춤 지침은 스킬에서 관리하세요</h2><p>저장한 스킬을 대화에 불러와 원하는 답변 방식을 적용할 수 있습니다.</p><button className="prism-action-button primary" onClick={() => onNavigate('/customize/skills')}>스킬로 이동 <ChevronRight size={15} /></button></section>;
   else if (pathname === '/import') page = <ImportPage onNotice={props.onNotice} />;

@@ -5,7 +5,9 @@ import { ArrowUp, ArrowUpRight, ArrowRight, Plus, Search, MessageSquare, Columns
 import { MODELS, PROVIDERS, Provider, Model, findModel } from '../lib/models';
 import BillingPanel from './billing-panel';
 import { Image, Video, Hexagon, PanelLeftClose, PanelLeftOpen, History, NotebookPen, Share2 } from 'lucide-react';
-import { Composer } from '../components/workspace/composer';
+import { Composer, type ComposerTool } from '../components/workspace/composer';
+import { CanvasPanel, MediaWorkspace, type CanvasDraft } from '../components/workspace/creative-workspace';
+import { BrowserLinkGuard } from '../components/workspace/browser-link-guard';
 import { PrismMark, WorkspaceHeader, NotebookDialog } from '../components/workspace/chrome';
 import { SettingsMenu } from '../components/workspace/settings-menu';
 import { SettingsPages } from '../components/workspace/settings-pages';
@@ -29,6 +31,7 @@ type FileRecord = {
     created_at: number;
 };
 type Bootstrap = {
+    capabilities?: { webResearch: boolean; image: boolean; video: boolean; remoteBrowser: boolean };
     beta?: boolean;
     models?: Model[];
     user: {
@@ -84,6 +87,10 @@ export default function Workspace() {
     } | null>(null);
     const [compared, setCompared] = useState(['gpt-6-astra', 'claude-fable-5-1']), [results, setResults] = useState<Record<string, CompareResult>>({});
     const [workspaceMode, setWorkspaceMode] = useState<'chat' | 'work'>('chat');
+    const [composerTool, setComposerTool] = useState<ComposerTool>('chat');
+    const [researchSources, setResearchSources] = useState({web:false});
+    const [videoAspect, setVideoAspect] = useState<'16:9'|'9:16'>('16:9');
+    const [canvasDrafts, setCanvasDrafts] = useState<Record<string,CanvasDraft>>({});
     const [searchOpen, setSearchOpen] = useState(false);
     const [collapsed, setCollapsed] = useState(false);
     const [notebookOpen, setNotebookOpen] = useState(false);
@@ -99,6 +106,40 @@ export default function Workspace() {
     useEffect(() => () => abortRef.current?.abort(), []);
     const availableModels = boot.models ?? (boot.beta ? MODELS.filter(m => m.id === 'gpt-6.1-sol') : MODELS);
     const selected = findModel(modelId) || MODELS[3], connected = Object.values(boot.providers).filter(p => p.configured).length;
+    const capabilities = boot.capabilities ?? {webResearch:false,image:false,video:false,remoteBrowser:false};
+    const activeTool = view === 'compare' ? 'chat' : composerTool;
+    const canvasKey = 'prism-canvas:v1:' + encodeURIComponent(boot.user?.email || 'guest') + ':' + (chatId || runningId.current || 'draft');
+    useEffect(() => {
+        try {
+            const stored = JSON.parse(sessionStorage.getItem(canvasKey) || 'null');
+            if (stored && typeof stored.text === 'string' && stored.text.length <= 100000 && typeof stored.saved === 'boolean') setCanvasDrafts(current => ({...current,[canvasKey]:stored}));
+        } catch {}
+    }, [canvasKey]);
+    function updateCanvasDraft(draft: CanvasDraft | null) {
+        setCanvasDrafts(current => { const next = {...current}; if (draft) next[canvasKey] = draft; else delete next[canvasKey]; return next; });
+        try { if (draft) sessionStorage.setItem(canvasKey,JSON.stringify(draft)); else sessionStorage.removeItem(canvasKey); }
+        catch { setNotice('초안은 현재 화면에 보관됩니다. 탭을 새로 열기 전에 파일로 저장해 주세요.'); }
+    }
+    function reviseCanvas(text: string) {
+        const revision = '다음 초안을 개선해 주세요. 의미는 유지하고 더 명확하게 다듬어 주세요.\n\n' + text;
+        if (revision.length > 32000) { setError('초안이 메시지 한도를 넘습니다. 먼저 Canvas를 파일로 저장한 뒤 첨부된 문서를 바탕으로 수정을 요청해 주세요.'); return; }
+        setPrompt(revision); inputRef.current?.focus();
+    }
+    useEffect(() => {
+        if (view === 'videos') { setComposerTool('video'); return; }
+        if (view === 'images') { setComposerTool('image'); return; }
+        if (view !== 'chat') return;
+        try {
+            const stored = localStorage.getItem('prism-tool:' + (chatId || 'draft'));
+            setComposerTool(stored && ['chat','canvas','research','learning','image','video'].includes(stored) ? stored as ComposerTool : 'chat');
+        } catch { setComposerTool('chat'); }
+    }, [view, chatId]);
+    function selectTool(tool: ComposerTool) {
+        if (busy) return;
+        setComposerTool(tool);
+        try { localStorage.setItem('prism-tool:' + (chatId || 'draft'), tool); } catch {}
+        if (view === 'images' || view === 'videos') go('/chat');
+    }
     const loadChats = useCallback(async () => { try {
         setChats(await api('conversations'));
     }
@@ -112,6 +153,7 @@ export default function Workspace() {
         loadFiles();
     } }).catch(e => setError(e.message)).finally(() => setReady(true)); }, [loadChats, loadFiles]);
     useEffect(() => {
+        const controller = new AbortController();
         setMobile(false);
         setError('');
         setSearch('');
@@ -121,11 +163,10 @@ export default function Workspace() {
         if (view === 'chat') {
             if (chatId && chatId !== runningId.current) {
                 setMessages([]);
-                api('conversations/' + chatId).then(d => { setMessages(d.messages); setModelId(d.conversation.model); }).catch(e => setError(e.message));
+                api('conversations/' + chatId,{signal:controller.signal}).then(d => { if (!controller.signal.aborted) { setMessages(d.messages); setModelId(d.conversation.model); } }).catch(e => { if (!controller.signal.aborted) setError(e.message); });
             }
             else if (!chatId && !busy) {
                 setMessages([]);
-                setPrompt('');
                 runningId.current = undefined;
             }
         }
@@ -137,6 +178,7 @@ export default function Workspace() {
             loadChats();
         if (view === 'admin')
             api('admin').then(setAdmin).catch(e => setError(e.message));
+        return () => controller.abort();
     }, [pathname]);
     useEffect(() => { if (!selected.efforts.includes(effort))
         setEffort(selected.efforts.includes('medium') ? 'medium' : selected.efforts[0] || 'medium'); if (!selected.pro)
@@ -184,7 +226,7 @@ export default function Workspace() {
     function choose(m: Model) { setModelId(m.id); setModelOpen(false); setModelQuery(''); }
     function example(value: string) { setPrompt(value); inputRef.current?.focus(); }
     async function stream(model: string, conversationId: string | undefined, signal: AbortSignal, onEvent: (data: any) => void) {
-        const r = await fetch('/api/chat', { ...post({ model, prompt, effort: findModel(model)?.efforts.includes(effort) ? effort : 'medium', pro: findModel(model)?.pro ? pro : false, conversationId, fileIds: attached, workspaceMode, skillId:selectedSkill?.id }), signal });
+        const r = await fetch('/api/chat', { ...post({ model, prompt, effort: findModel(model)?.efforts.includes(effort) ? effort : 'medium', pro: findModel(model)?.pro ? pro : false, conversationId, fileIds: attached, workspaceMode, skillId:selectedSkill?.id, tool: activeTool, researchSources }), signal });
         if (!r.ok) {
             const d: any = await r.json();
             throw new Error(d.error || 'Unable to connect.');
@@ -225,6 +267,9 @@ export default function Workspace() {
             return;
         setError('');
         followBottom.current = true;
+        if (activeTool === 'image' && !capabilities.image) { setError('이미지 생성 서비스가 아직 연결되지 않았습니다. 프롬프트는 그대로 보관됩니다.'); return; }
+        if (activeTool === 'video' && !capabilities.video) { setError('동영상 생성 서비스가 아직 연결되지 않았습니다. 프롬프트는 그대로 보관됩니다.'); return; }
+        if (activeTool === 'research' && researchSources.web && !capabilities.webResearch) { setError('웹 리서치는 아직 연결되지 않았습니다. 소스에서 웹을 끄고 제공한 문서로 조사할 수 있습니다.'); return; }
         if (!boot.user) {
             setError('Sign in to send messages and save your conversations.');
             return;
@@ -255,6 +300,7 @@ export default function Workspace() {
                     if (e.type === 'start') {
                         started = true;
                         runningId.current = e.conversationId;
+                        try { localStorage.setItem('prism-tool:' + e.conversationId, e.tool || composerTool); } catch {}
                     }
                     if (e.type === 'delta')
                         setMessages(old => old.map(m => m.id === assistantId ? { ...m, content: m.content + e.text } : m));
@@ -329,6 +375,10 @@ export default function Workspace() {
       prompt={prompt} onPrompt={setPrompt} inputRef={inputRef}
       models={availableModels} selected={selected} onModel={choose} providers={boot.providers}
       effort={effort} onEffort={setEffort} mode={workspaceMode} compare={view === 'compare'}
+      tool={activeTool} onTool={selectTool}
+      researchSources={researchSources} onResearchSources={setResearchSources}
+      videoAspect={videoAspect} onVideoAspect={setVideoAspect} capabilities={capabilities}
+      showCapabilityNotice={view !== 'images' && view !== 'videos'}
       busy={busy} ready={ready} uploading={uploading} files={files} attached={attached}
       signedIn={!!boot.user} selectedSkill={selectedSkill} onSkill={setSelectedSkill}
       onAttach={id => setAttached(current => current.includes(id) ? current : [...current, id].slice(-3))}
@@ -339,6 +389,8 @@ export default function Workspace() {
       if (busy) { setNotice('응답을 중지한 뒤 새 채팅을 시작해주세요.'); return; }
       setMobile(false);
       setMessages([]); setPrompt(''); setAttached([]); setSelectedSkill(null); runningId.current = undefined;
+      setComposerTool('chat'); setResearchSources({web:false});
+      try { localStorage.setItem('prism-tool:draft','chat'); } catch {}
       if (pathname !== '/chat' && pathname !== '/') go('/chat');
       inputRef.current?.focus();
     }
@@ -356,8 +408,17 @@ export default function Workspace() {
       catch (failure) { setShareError(failure instanceof Error ? failure.message : '공개 링크를 만들지 못했습니다.'); }
       finally { setShareBusy(false); }
     }
-    const secondaryView = ['personalization-settings', 'gemini-spark', 'browser-settings', 'customize', 'gems', 'import', 'sharing', 'share', 'images', 'videos', 'scheduled', 'feedback'].includes(view);
+    async function saveCanvas(text: string) {
+      if (!boot.user) throw new Error('Canvas 문서를 저장하려면 로그인해 주세요.');
+      const body = new FormData();
+      body.append('file',new File([text],'Canvas-' + new Date().toISOString().slice(0,10) + '.md',{type:'text/markdown'}));
+      const created = await api('files',{method:'POST',body});
+      await loadFiles(); setAttached(current => [...current.filter(id => id !== created.id),created.id].slice(-3));
+      setNotice('Canvas를 파일에 저장하고 다음 메시지에 첨부했습니다.');
+    }
+    const secondaryView = ['personalization-settings', 'gemini-spark', 'browser-settings', 'customize', 'gems', 'import', 'sharing', 'share', 'scheduled', 'feedback'].includes(view);
     return <div className={'app-shell gemini-shell ' + (mobile ? 'sidebar-open ' : '') + (collapsed ? 'sidebar-collapsed' : '')}>
+ <BrowserLinkGuard signedIn={!!boot.user}/>
  <input ref={uploadRef} type="file" accept=".txt,.md,.csv,.json,.ts,.tsx,.js,.jsx,.py,.html,.css,.xml,.yaml,.yml,.sql" hidden onChange={e => { const f = e.target.files?.[0]; if (f)
         upload(f); }}/>
  {mobile && <button className="sidebar-backdrop" aria-label="Close navigation" onClick={() => setMobile(false)}/>}
@@ -372,10 +433,10 @@ export default function Workspace() {
    {chats.length > 0 && <section className="gemini-recent"><h2>최근</h2>{chats.slice(0,8).map(chat => <button key={chat.id} className={chatId === chat.id ? 'is-active' : ''} onClick={() => go('/chat/' + chat.id)} title={chat.title}>{chat.title}</button>)}</section>}
    <div className="gemini-account-row"><button className="gemini-account" onClick={() => go('/settings')}><span className="gemini-avatar">{boot.user?.name?.[0]?.toUpperCase() || 'P'}</span><span><strong>{boot.user?.name || 'Prism'}</strong><small>{boot.user ? boot.beta ? '무료 베타' : '개인 계정' : '로그인'}</small></span></button><SettingsMenu onNavigate={go} onHelp={() => setHelp(true)} signedIn={!!boot.user} beta={boot.beta} triggerClassName="gemini-settings-trigger"/></div>
  </aside>
- <div className="main-shell gemini-workspace"><WorkspaceHeader onMenu={() => { if (window.matchMedia('(max-width: 767px)').matches) setMobile(true); else setCollapsed(false); }} onNew={newChat} onNotice={setNotice} showNavigation={collapsed}/>
+ <div className="main-shell gemini-workspace" data-glow={view === 'chat' && messages.length === 0 && composerTool !== 'video'}><WorkspaceHeader onMenu={() => { if (window.matchMedia('(max-width: 767px)').matches) setMobile(true); else setCollapsed(false); }} onNew={newChat} onNotice={setNotice} showNavigation={collapsed}/>
  <main ref={mainRef} className={'main-content gemini-main view-' + view} onScroll={event => { const target = event.currentTarget; followBottom.current = target.scrollHeight - target.scrollTop - target.clientHeight < 120; }}>{errorBanner}
  {['history','files','models','compare'].includes(view) && <nav className="prism-library-nav" aria-label="라이브러리 종류">{[{path:'/history',label:'채팅'},{path:'/files',label:'파일 및 노트북'},{path:'/models',label:'AI 모델'},...(!boot.beta?[{path:'/compare',label:'모델 비교'}]:[])].map(item => <button key={item.path} onClick={() => go(item.path)} aria-current={view === item.path.slice(1) ? 'page' : undefined}>{item.label}</button>)}</nav>}
- {view === 'chat' && (messages.length === 0 ? <div className="gemini-welcome"><div className="gemini-welcome-inner"><h1>{workspaceMode === 'chat' ? '무엇을 도와드릴까요?' : '어떤 작업을 도와드릴까요?'}</h1>{composer}<div className="gemini-mode-switch" role="group" aria-label="작업 모드"><button type="button" aria-pressed={workspaceMode === 'chat'} className={workspaceMode === 'chat' ? 'selected' : ''} onClick={() => setWorkspaceMode('chat')}>채팅</button><button type="button" aria-pressed={workspaceMode === 'work'} className={workspaceMode === 'work' ? 'selected' : ''} onClick={() => setWorkspaceMode('work')}>작업</button></div></div></div> : <div className="conversation-screen"><div className="chat-toolbar"><span><MessageSquare size={15}/> {chats.find(c => c.id === chatId)?.title || 'Your conversation'}</span><div className="prism-chat-actions">{chatId && <button disabled={busy} onClick={() => { setShareOpen(true); setShareUrl(''); setShareError(''); }}><Share2 size={15}/>공유</button>}<button onClick={exportChat}><Download size={14}/>내보내기</button></div></div><div className="messages">{messages.map(m => <div key={m.id} className={'message ' + m.role}>{m.role === 'assistant' ? <Mark provider={findModel(m.model || '')?.provider || selected.provider} size="small"/> : <span className="avatar">{boot.user?.name?.[0] || 'Y'}</span>}<div className="message-body"><h4>{m.role === 'user' ? 'You' : findModel(m.model || '')?.name || selected.name}</h4>{m.content ? <TextResponse text={m.content}/> : <div className="thinking"><LoaderCircle size={15} className="spin"/> Thinking it through…</div>}{m.content && <button className="message-copy" onClick={() => copy(m.content)}><Copy size={13}/> Copy</button>}</div></div>)}<div ref={endRef}/></div><div className="chat-composer">{composer}</div></div>)}
+ {view === 'chat' && (messages.length === 0 ? <div className="gemini-welcome"><div className="gemini-welcome-inner"><h1>{workspaceMode === 'chat' ? '무엇을 도와드릴까요?' : '어떤 작업을 도와드릴까요?'}</h1>{composer}<div className="gemini-mode-switch" role="group" aria-label="작업 모드"><button type="button" aria-pressed={workspaceMode === 'chat'} className={workspaceMode === 'chat' ? 'selected' : ''} onClick={() => setWorkspaceMode('chat')}>채팅</button><button type="button" aria-pressed={workspaceMode === 'work'} className={workspaceMode === 'work' ? 'selected' : ''} onClick={() => setWorkspaceMode('work')}>작업</button></div></div></div> : <div className={composerTool === 'canvas' ? 'prism-canvas-layout' : 'prism-conversation-layout'}><div className="conversation-screen"><div className="chat-toolbar"><span><MessageSquare size={15}/> {chats.find(c => c.id === chatId)?.title || 'Your conversation'}</span><div className="prism-chat-actions">{chatId && <button disabled={busy} onClick={() => { setShareOpen(true); setShareUrl(''); setShareError(''); }}><Share2 size={15}/>공유</button>}<button onClick={exportChat}><Download size={14}/>내보내기</button></div></div><div className="messages">{messages.map(m => <div key={m.id} className={'message ' + m.role}>{m.role === 'assistant' ? <Mark provider={findModel(m.model || '')?.provider || selected.provider} size="small"/> : <span className="avatar">{boot.user?.name?.[0] || 'Y'}</span>}<div className="message-body"><h4>{m.role === 'user' ? 'You' : findModel(m.model || '')?.name || selected.name}</h4>{m.content ? <TextResponse text={m.content}/> : <div className="thinking"><LoaderCircle size={15} className="spin"/> Thinking it through…</div>}{m.content && <button className="message-copy" onClick={() => copy(m.content)}><Copy size={13}/> Copy</button>}</div></div>)}<div ref={endRef}/></div><div className="chat-composer">{composer}</div></div>{composerTool === 'canvas' && <CanvasPanel key={canvasKey} draft={canvasDrafts[canvasKey]} onDraftChange={updateCanvasDraft} text={[...messages].reverse().find(message => message.role === 'assistant')?.content || ''} busy={busy} onRevise={reviseCanvas} onSave={saveCanvas} onError={setError}/>}</div>)}
  {view === 'compare' && !boot.beta && <div className="page-inner"><div className="page-heading"><span className="eyebrow">MORE PERSPECTIVES. BETTER DECISIONS.</span><h1>One question. Different minds.</h1><p>Send the same prompt to your models and compare real responses side by side.</p></div><div className="compare-selectors">{compared.map((id, i) => <div key={i} className="compare-select"><Mark provider={findModel(id)!.provider} size="small"/><select aria-label={'Comparison model ' + (i + 1)} disabled={busy} value={id} onChange={e => { if (compared.includes(e.target.value)) {
         setNotice('Choose a different model for each panel.');
         return;
@@ -415,7 +476,8 @@ export default function Workspace() {
     } }}>사용량 확인 후 정산</button>}</td></tr>)}</tbody></table></div></section></> : <Empty icon={<ShieldCheck />} title="Administrator access required" text="An administrator must set ADMIN_USER_ID to their authenticated account ID as a server secret."/>}</div>}
  {['privacy', 'terms', 'faq'].includes(view) && <div className="page-inner legal"><div className="page-heading"><span className="eyebrow">A LITTLE CLARITY</span><h1>{view === 'privacy' ? 'Your data in Prism.' : view === 'terms' ? 'How this workspace works.' : 'A few helpful answers.'}</h1><p>Release information · October 16, 2026</p></div>{(view === 'privacy' ? [['What is stored?', 'Your authenticated account ID, conversations, uploaded text files, and provider-reported usage are stored in this site’s database and object storage. Provider API keys are server secrets and are never returned to the browser.'], ['Where do prompts go?', 'When you send a message, your conversation context and selected attachments are transmitted to the provider you select. Comparison sends the prompt to every selected provider. Each provider’s own data processing terms apply.'], ['How can I delete my data?', 'Delete conversations from Chat history and documents from My files. Usage records remain for operational accounting and enforcing beta limits. Use Settings to delete all conversations and uploaded files. Avoid entering sensitive personal information. This does not delete your ChatGPT account. Accounting records remain for reconciliation; their retention and deletion policy must be finalized before commercial launch. Customer support is not configured yet.'], ['Deployment access', 'The site can be visited publicly. ChatGPT sign-in is required for AI requests and saved conversations. Data access is additionally checked by account ID on the server.']] : view === 'terms' ? [['Independent API workspace', 'Prism is an independent interface to third-party AI APIs. It is not ChatGPT, Claude, or the Gemini consumer app and does not transfer a consumer subscription or its benefits.'], ['Model access and usage', 'Models are available only when the configured API account has access and sufficient quota. Responses can be inaccurate. You are responsible for checking results and for using providers in accordance with their applicable terms.'], ['Charges and limits', 'Requests consume the configured provider’s API quota and may incur fees, including interrupted responses. Comparison makes a separate billable request for each selected model. Prism is being prepared for prepaid credit purchases of KRW 10,000, 30,000, or 50,000. No subscription renewals are used. Sales remain disabled until pricing, refunds, seller information, and merchant setup are complete.'], ['Before a public launch', 'Operator: 종합상사 루비; representative: 노휘석. Registration number, address, customer support, deduction rates, refund terms and credit validity are pending. Commercial sales are disabled. The free beta has server-enforced allowances and no customer payments.']] : [['Do I need ChatGPT Plus or Pro?', 'Prism uses API access, which is separate from ChatGPT subscriptions. You need ChatGPT sign-in to use AI and save conversations. The provider API account supplies the model access and quota.'], ['How do I choose a model?', 'Open the model selector below your message, or explore the Model library. The model label is the actual configured API model. You can change models within a conversation.'], ['What do Pro and Extra High do?', 'For supported OpenAI models, Pro selects the API reasoning mode and Extra High selects reasoning effort. They can increase latency and API usage. They do not reproduce every feature of a ChatGPT subscription.'], ['Can I compare answers?', 'Yes. Select two or three different models in Compare models, then send one prompt. Each real response is shown independently. Provider connections are required.'], ['Which files can I upload?', 'Plain text, Markdown, CSV, JSON, and supported source code files up to 128 KB. Attach up to three files per message. PDF and image processing are not enabled.'], ['Why does a provider say Not connected?', 'The matching API key has not been configured as a server secret. Settings shows the required secret names and provider console links. No synthetic AI replies are generated.']]).map(([title, text]) => <section className="legal-section" key={title}><h2>{title}</h2><p>{text}</p></section>)}</div>}
  {view === 'auth' && <div className="page-inner"><Empty icon={<ShieldCheck />} title="A workspace for your best ideas." text="Sign in with ChatGPT to save your conversations, compare models, and keep your documents together." action={<a className="primary-button" href="/signin-with-chatgpt?return_to=%2Fchat" target="_top">Continue with ChatGPT <ArrowUpRight size={15}/></a>}/><p className="fine-print">Authentication is managed by ChatGPT. Account creation and password recovery are handled there.</p></div>}
- {!secondaryView && !['chat', 'compare', 'models', 'history', 'files', 'usage', 'settings', 'billing', 'admin', 'privacy', 'terms', 'faq', 'auth'].includes(view) && <Empty icon={<Search />} title="This page wandered off." text="Head back to your workspace to start again." action={<button className="primary-button" onClick={() => go('/chat')}>Back to workspace</button>}/>}
+ {!secondaryView && !['chat', 'compare', 'models', 'history', 'files', 'usage', 'settings', 'billing', 'admin', 'privacy', 'terms', 'faq', 'auth', 'images', 'videos'].includes(view) && <Empty icon={<Search />} title="This page wandered off." text="Head back to your workspace to start again." action={<button className="primary-button" onClick={() => go('/chat')}>Back to workspace</button>}/>}
+ {(view === 'images' || view === 'videos') && <MediaWorkspace key={view} kind={view === 'videos' ? 'video' : 'image'} composer={composer} onNavigate={go} onFocus={() => inputRef.current?.focus()}/>}
  {secondaryView && <SettingsPages pathname={pathname} signedIn={!!boot.user} onNavigate={go} onNotice={setNotice} onError={setError}/>}
  </main><footer className="app-footer"><span>{boot.beta ? 'Free beta · GPT-6.1 Sol · Daily allowance applies' : 'Room for your next big idea.'}</span><span>Made for curious minds <span className="footer-spark">✦</span></span></footer></div>
  <ChatSearchDialog open={searchOpen} onOpenChange={setSearchOpen} onNavigate={go} signedIn={!!boot.user}/>

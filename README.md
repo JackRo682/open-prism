@@ -2,13 +2,15 @@
 
 Prism is an authenticated AI workspace with provider adapters for OpenAI, Anthropic, and Google. It runs on **ChatGPT Sites, Cloudflare Workers, D1, and R2**, with Sign in with ChatGPT. The current free beta enables GPT-6.1 Sol; the existing model catalog and paid-access checks remain in place.
 
-The November 2026 interface follows the two supplied Gemini references: a dark 288px sidebar, a blue-violet workspace glow, a centered 660px composer, and a 240px settings menu. Prism keeps its own name, actual account information, and configured model names. See [the implementation notes](docs/gemini-design-implementation.md) for measurements, routes, API contracts, and verification limits.
+The November 2026 interface follows the supplied Gemini desktop references, including the 12-screen tool/settings package: a dark 288px sidebar, a blue-violet workspace glow, a centered 660px composer, and a 240px settings menu. Prism keeps its own name, actual account information, and configured model names. See [the implementation notes](docs/gemini-design-implementation.md) for measurements, routes, API contracts, and verification limits.
 
 ## Implemented behavior
 
 - Chat and Work welcome states, model selection, reasoning controls, streamed responses, stop, saved conversations, and model comparison when the runtime permits it.
+- Canvas, Guided Learning, and supplied-document research through the existing provider; editable Canvas drafts with per-tab recovery and real Markdown-file saving.
+- Browser preferences with owner-scoped persistence and actual external-link confirmation; media composer, acknowledgement, and video-introduction states reflect unavailable generation services.
 - File upload and attachment; new notebooks are saved Markdown documents in the existing private file store.
-- System/light/dark themes, nested settings menus, responsive navigation, and a chat-search dialog that searches the signed-in user's conversation titles and message text.
+- Cookie-initialized System/light/dark themes, nested settings/tool menus, responsive navigation, and a chat-search dialog that searches the signed-in user's conversation titles and message text.
 - Saved personalization, memory, work-response preferences, and up to 20 reusable skills. Type `@` in the composer to select a saved skill. The server reads the owner's current settings on each request.
 - Memory import with a preview and replacement confirmation; public conversation snapshots with owner-managed revocation.
 - Browser speech recognition when supported, print-to-PDF through the browser, and an app-install action when the browser offers installation.
@@ -46,7 +48,7 @@ node --test tests/integration.mjs
 pnpm build
 ```
 
-The integration suite contains **36 tests**, using isolated SQLite and mocked provider transports. It covers authentication, ownership, streaming persistence, settings validation and context application, search, share revocation and concurrency, uploads, quotas, and accounting. Browser behavior and live provider access are separate acceptance checks.
+The integration suite contains **40 tests**, using isolated SQLite and mocked provider transports. It covers authentication, ownership, streaming persistence, settings validation and context application, search, share revocation and concurrency, uploads, quotas, accounting, tool validation, unavailable-feature side effects, and monotonic conversation chronology under a frozen or backward clock. Browser behavior and live provider access are separate acceptance checks.
 
 Use the existing Sites build and publishing workflow for hosted releases. Package and publish the exact pushed source commit. Managed preview uses `sites-preview start <absolute-checkout>`; use its returned URL. A portable checkout can use `pnpm dev`.
 

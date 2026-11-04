@@ -8,6 +8,8 @@ const THEME_EVENT = 'prism-theme-change';
 
 function readTheme(): ThemePreference {
   try {
+    const cookie = document.cookie.match(/(?:^|; )prism-theme=(system|light|dark)(?:;|$)/)?.[1];
+    if (cookie === 'system' || cookie === 'light' || cookie === 'dark') return cookie;
     const value = localStorage.getItem(THEME_STORAGE_KEY);
     if (value === 'system' || value === 'light' || value === 'dark') return value;
   } catch {
@@ -20,8 +22,10 @@ function applyTheme(preference: ThemePreference) {
   const dark = preference === 'dark' ||
     (preference === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
   document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+  document.documentElement.dataset.themePreference = preference;
   document.documentElement.classList.toggle('dark', dark);
   document.documentElement.style.colorScheme = dark ? 'dark' : 'light';
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', dark ? '#0f0f0f' : '#ffffff');
 }
 
 /** Keep the menu, all dialogs and other open tabs on the same theme. */
@@ -66,6 +70,7 @@ export function useWorkspaceTheme() {
 
   const setTheme = useCallback((preference: ThemePreference) => {
     try { localStorage.setItem(THEME_STORAGE_KEY, preference); } catch {}
+    try { document.cookie = `${THEME_STORAGE_KEY}=${preference}; Path=/; Max-Age=31536000; SameSite=Lax${location.protocol === 'https:' ? '; Secure' : ''}`; } catch {}
     preferenceRef.current = preference;
     setThemeState(preference);
     applyTheme(preference);

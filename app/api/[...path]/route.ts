@@ -5,6 +5,7 @@ import { invokeProvider, Turn } from '../../../lib/provider';
 import { BillingError, billingOverview, getBillingConfig, validateConfig, launchBlockers, paymentRequest, paymentWebhook, reserve, settle, cost } from '../../../lib/billing';
 import { reserveBeta, betaCost, BETA_OUTPUT, BETA_INPUT_BYTES } from '../../../lib/beta';
 import { getWorkspaceSettings, patchWorkspaceSettings, withWorkspaceContext, publicMessageContent } from '../../../lib/workspace-settings';
+import { workspaceCapabilities, validateToolRequest, withToolContext, WorkspaceToolError } from '../../../lib/workspace-tools';
 export const dynamic='force-dynamic';
 const json=(data:unknown,status=200)=>Response.json(data,{status,headers:{'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
 const uid=()=>crypto.randomUUID();
@@ -26,7 +27,7 @@ async function handle(req:Request){
   return json({title:share.title,created_at:share.created_at,messages:JSON.parse(share.snapshot)});
  }
  const user=await getChatGPTUser();
- if(path[0]==='bootstrap'&&req.method==='GET')return json({user:user?{name:user.fullName||user.email.split('@')[0],email:user.email}:null,beta:env.BETA_MODE==='true',models:env.BETA_MODE==='true'?MODELS.filter(m=>m.id==='gpt-6.1-sol'):MODELS,providers:Object.fromEntries(Object.entries(PROVIDERS).map(([p,v])=>[p,{configured:!!env[v.secret as keyof typeof env]}])),isAdmin:!!user&&!!env.ADMIN_USER_ID&&user.userId===env.ADMIN_USER_ID});
+ if(path[0]==='bootstrap'&&req.method==='GET')return json({user:user?{name:user.fullName||user.email.split('@')[0],email:user.email}:null,beta:env.BETA_MODE==='true',models:env.BETA_MODE==='true'?MODELS.filter(m=>m.id==='gpt-6.1-sol'):MODELS,providers:Object.fromEntries(Object.entries(PROVIDERS).map(([p,v])=>[p,{configured:!!env[v.secret as keyof typeof env]}])),capabilities:workspaceCapabilities,isAdmin:!!user&&!!env.ADMIN_USER_ID&&user.userId===env.ADMIN_USER_ID});
  if(!user)return json({error:'Sign in with ChatGPT to save your work and use AI models.'},401);
  if(req.method!=='GET'&&!mutationAllowed(req))return json({error:'Invalid request origin.'},403);
  const owner=user.userId,sql=db();
@@ -52,7 +53,7 @@ async function handle(req:Request){
    if(!body||typeof body.conversationId!=='string'||body.conversationId.length>100)return json({error:'A valid conversation is required.'},400);
    const chat=await sql.prepare('SELECT id,title FROM conversations WHERE id=? AND user_id=?').bind(body.conversationId,owner).first<{id:string;title:string}>();
    if(!chat)return json({error:'Conversation not found.'},404);
-   const messages=(await sql.prepare('SELECT role,content,model,created_at FROM messages WHERE conversation_id=? ORDER BY created_at,id').bind(chat.id).all<{role:string;content:string;model:string|null;created_at:number}>()).results;
+   const messages=(await sql.prepare('SELECT role,content,model,created_at FROM messages WHERE conversation_id=? ORDER BY created_at,rowid').bind(chat.id).all<{role:string;content:string;model:string|null;created_at:number}>()).results;
    if(!messages.length)return json({error:'Send a message before sharing this conversation.'},400);
    const snapshot=JSON.stringify(messages.map(message=>({...message,content:publicMessageContent(message.content)})));
    if(new TextEncoder().encode(snapshot).length>1000000)return json({error:'This conversation is too large to share. Create a shorter conversation.'},400);
@@ -101,7 +102,7 @@ async function handle(req:Request){
   if(req.method==='GET'&&!path[1])return json((await sql.prepare('SELECT id,title,model,created_at,updated_at FROM conversations WHERE user_id=? ORDER BY updated_at DESC LIMIT 200').bind(owner).all()).results);
   const id=path[1];if(!id)return json({error:'Conversation ID required.'},400);
   const chat=await sql.prepare('SELECT * FROM conversations WHERE id=? AND user_id=?').bind(id,owner).first();if(!chat)return json({error:'Conversation not found.'},404);
-  if(req.method==='GET')return json({conversation:chat,messages:(await sql.prepare('SELECT id,role,content,model,created_at FROM messages WHERE conversation_id=? ORDER BY created_at,id').bind(id).all()).results});
+  if(req.method==='GET')return json({conversation:chat,messages:(await sql.prepare('SELECT id,role,content,model,created_at FROM messages WHERE conversation_id=? ORDER BY created_at,rowid').bind(id).all()).results});
   if(req.method==='DELETE'){await sql.batch([sql.prepare('DELETE FROM messages WHERE conversation_id=?').bind(id),sql.prepare('DELETE FROM conversations WHERE id=? AND user_id=?').bind(id,owner)]);return json({ok:true});}
   if(req.method==='PATCH'){const b:any=await req.json();if(typeof b.title!=='string'||!b.title.trim()||b.title.length>100)return json({error:'Use a title between 1 and 100 characters.'},400);await sql.prepare('UPDATE conversations SET title=?,updated_at=? WHERE id=? AND user_id=?').bind(b.title.trim(),Date.now(),id,owner).run();return json({ok:true});}
  }
@@ -133,8 +134,11 @@ async function handle(req:Request){
  }
  if(path[0]==='chat'&&req.method==='POST'){
   if(Number(req.headers.get('content-length')||0)>100000)return json({error:'Request is too large.'},413);
-  const body:any=await req.json(),model=findModel(body.model);
+  const body:any=await req.json();
+  if(!body||typeof body!=='object'||Array.isArray(body))return json({error:'Provide a valid chat request.'},400);
+  const model=findModel(body.model);
   if(!model||typeof body.prompt!=='string'||!body.prompt.trim()||body.prompt.length>32000)return json({error:'Choose a valid model and enter a prompt under 32,000 characters.'},400);
+  const {tool}=validateToolRequest(body);
   if(body.workspaceMode!==undefined&&body.workspaceMode!=='chat'&&body.workspaceMode!=='work')return json({error:'Choose chat or work mode.'},400);
   if(body.skillId!==undefined&&(typeof body.skillId!=='string'||!body.skillId||body.skillId.length>100))return json({error:'Select a valid saved skill.'},400);
   const effort=body.effort||'medium';if(model.efforts.length&&!model.efforts.includes(effort))return json({error:'This reasoning level is not supported by the selected model.'},400);
@@ -156,9 +160,14 @@ async function handle(req:Request){
   let prompt=body.prompt.trim(),reservation=0,requestId=uid(),providerStarted=false;
   try{
    for(const id of body.fileIds||[]){const file:any=await sql.prepare('SELECT * FROM files WHERE id=? AND user_id=?').bind(id,owner).first();if(!file)throw new Error('An attached file is no longer available.');const object=await env.BUCKET?.get(file.key);if(!object)throw new Error('An attached file could not be read.');prompt+='\n\n<attached_document name='+JSON.stringify(file.name)+'>\n'+await object.text()+'\n</attached_document>';}
-   const history=(await sql.prepare('SELECT role,content FROM messages WHERE conversation_id=? ORDER BY created_at DESC,id DESC LIMIT 40').bind(conversationId).all<Turn>()).results.reverse();
+   const historyRows=(await sql.prepare('SELECT role,content,created_at FROM messages WHERE conversation_id=? ORDER BY created_at DESC,rowid DESC LIMIT 40').bind(conversationId).all<Turn & {created_at:number}>()).results.reverse();
+   const history:Turn[]=historyRows.map(({role,content})=>({role,content}));
+   // The conversation lock serializes turns. Keep timestamps strictly increasing
+   // even when a provider finishes within one millisecond or the clock moves back.
+   // rowid above also preserves insertion order for legacy equal-time messages.
+   const userCreatedAt=Math.max(now,(historyRows.at(-1)?.created_at??(now-1))+1);
    const settings=await getWorkspaceSettings(sql,owner);
-   const providerPrompt=withWorkspaceContext(prompt,settings,body.workspaceMode||'chat',body.skillId);
+   const providerPrompt=withToolContext(withWorkspaceContext(prompt,settings,body.workspaceMode||'chat',body.skillId),tool);
    const providerTurns:Turn[]=[...history,{role:'user',content:providerPrompt}];
    if(providerTurns.reduce((n,t)=>n+t.content.length,0)>240000)throw new Error('This conversation is too long. Start a new chat or use smaller documents.');
    // UTF-8 byte count bounds text tokens conservatively. Pro mode has no
@@ -170,7 +179,7 @@ async function handle(req:Request){
    if(!beta)await reserve(sql,owner,requestId,reservation);
    await sql.batch([
     ...(!body.conversationId?[sql.prepare('INSERT INTO conversations (id,user_id,title,model,created_at,updated_at) VALUES (?,?,?,?,?,?)').bind(conversationId,owner,body.prompt.slice(0,80),model.id,now,now)]:[]),
-    sql.prepare('INSERT INTO messages (id,conversation_id,role,content,model,created_at) VALUES (?,?,?,?,?,?)').bind(uid(),conversationId,'user',prompt,null,now),
+    sql.prepare('INSERT INTO messages (id,conversation_id,role,content,model,created_at) VALUES (?,?,?,?,?,?)').bind(uid(),conversationId,'user',prompt,null,userCreatedAt),
     ...(!beta?[sql.prepare('INSERT INTO usage (id,user_id,model,provider,status,created_at,rate_snapshot,reserved_amount) VALUES (?,?,?,?,?,?,?,?)').bind(requestId,owner,model.id,model.provider,'pending',now,JSON.stringify(rate),reservation)]:[])
    ]);
    const encoder=new TextEncoder(),aborter=new AbortController();const timer=setTimeout(()=>aborter.abort(),240000);req.signal.addEventListener('abort',()=>aborter.abort(),{once:true});
@@ -178,20 +187,20 @@ async function handle(req:Request){
     async start(controller){
      let text='';const emit=(value:unknown)=>controller.enqueue(encoder.encode('data: '+JSON.stringify(value)+'\n\n'));
      try{
-      emit({type:'start',conversationId,model:model.id});
+      emit({type:'start',conversationId,model:model.id,tool});
       providerStarted=true;
       const measured=await invokeProvider(model,key,providerTurns,effort,false,aborter.signal,delta=>{text+=delta;emit({type:'delta',text:delta});},beta?BETA_OUTPUT:8192);
       if(beta){const charge=betaCost(measured.input,measured.output);if(charge>reservation)throw new Error('Provider usage exceeded the reserved beta allowance.');await sql.prepare('UPDATE usage SET reserved_amount=? WHERE id=? AND user_id=?').bind(charge,requestId,owner).run();}else await settle(sql,owner,requestId,reservation,cost(rate,measured.input,measured.output));
       if(!text.trim())throw new Error('The provider returned no text.');
-      const ended=Date.now();
-      await sql.batch([sql.prepare('INSERT INTO messages (id,conversation_id,role,content,model,created_at) VALUES (?,?,?,?,?,?)').bind(uid(),conversationId,'assistant',text,model.id,ended),sql.prepare('UPDATE usage SET input_tokens=?,output_tokens=?,status=?,duration=? WHERE id=? AND user_id=?').bind(measured.input,measured.output,'complete',ended-now,requestId,owner),sql.prepare('UPDATE conversations SET updated_at=?,model=? WHERE id=? AND user_id=?').bind(ended,model.id,conversationId,owner)]);
-      emit({type:'done',usage:measured,conversationId});
+      const ended=Date.now(),assistantCreatedAt=Math.max(ended,userCreatedAt+1);
+      await sql.batch([sql.prepare('INSERT INTO messages (id,conversation_id,role,content,model,created_at) VALUES (?,?,?,?,?,?)').bind(uid(),conversationId,'assistant',text,model.id,assistantCreatedAt),sql.prepare('UPDATE usage SET input_tokens=?,output_tokens=?,status=?,duration=? WHERE id=? AND user_id=?').bind(measured.input,measured.output,'complete',Math.max(0,ended-now),requestId,owner),sql.prepare('UPDATE conversations SET updated_at=?,model=? WHERE id=? AND user_id=?').bind(assistantCreatedAt,model.id,conversationId,owner)]);
+      emit({type:'done',usage:measured,conversationId,tool});
      }catch(e){const error=(e instanceof Error&&e.name==='AbortError'?'The response timed out or was stopped.':e instanceof Error?e.message:'The response could not be completed.')+(beta?' The request remains counted toward the beta allowance.':' 사용량이 확정되지 않은 요청의 예약금은 정산 확인까지 보류됩니다.');await sql.prepare('UPDATE usage SET status=?,error=?,duration=? WHERE id=?').bind('error',error,Date.now()-now,requestId).run();try{emit({type:'error',error});}catch{} }
      finally{clearTimeout(timer);await sql.prepare('DELETE FROM rate_limits WHERE key=?').bind(lockKey).run();try{controller.close();}catch{}}
     },cancel(){aborter.abort();}
    });
    return new Response(stream,{headers:{'Content-Type':'text/event-stream','Cache-Control':'no-cache, no-transform','X-Content-Type-Options':'nosniff'}});
-  }catch(e){if(reservation&&!providerStarted){if(beta)await sql.prepare("UPDATE usage SET status='error',error='Request preparation failed' WHERE id=? AND user_id=?").bind(requestId,owner).run();else await settle(sql,owner,requestId,reservation,0);}await sql.prepare('DELETE FROM rate_limits WHERE key=?').bind(lockKey).run();return json({error:e instanceof Error?e.message:'Request failed.'},e instanceof BillingError?e.status:400);}
+  }catch(e){if(reservation&&!providerStarted){if(beta)await sql.prepare("UPDATE usage SET status='error',error='Request preparation failed' WHERE id=? AND user_id=?").bind(requestId,owner).run();else await settle(sql,owner,requestId,reservation,0);}await sql.prepare('DELETE FROM rate_limits WHERE key=?').bind(lockKey).run();return json({error:e instanceof Error?e.message:'Request failed.',...(e instanceof WorkspaceToolError?{code:e.code}:{})},e instanceof BillingError||e instanceof WorkspaceToolError?e.status:400);}
  }
  return json({error:'Endpoint not found.'},404);
 }
@@ -202,7 +211,7 @@ async function dispatch(req:Request){try{
   while(true){const part=await reader.read();if(part.done)break;bytes+=part.value.byteLength;if(bytes>maxBytes){void reader.cancel();return json({error:'Request is too large.'},413);}}
  }
  return await handle(req);
-}catch(e){if(e instanceof BillingError)return json({error:e.message},e.status);if(e instanceof SyntaxError)return json({error:'Invalid JSON request.'},400);return json({error:'The request could not be completed. Please retry.'},500);}}
+}catch(e){if(e instanceof WorkspaceToolError)return json({error:e.message,code:e.code},e.status);if(e instanceof BillingError)return json({error:e.message},e.status);if(e instanceof SyntaxError)return json({error:'Invalid JSON request.'},400);return json({error:'The request could not be completed. Please retry.'},500);}}
 async function safe(req:Request){
  const requestId=uid(),started=Date.now();
  const response=await dispatch(req);

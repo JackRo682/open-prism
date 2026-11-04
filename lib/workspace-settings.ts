@@ -6,15 +6,17 @@ export type WorkspaceSettings = {
  customInstructions: string;
  memory: string;
  workResponseStyle: 'plan-first' | 'direct';
+ browserTarget: 'current' | 'remote';
+ browserPermission: 'ask' | 'approve';
  skills: SavedSkill[];
 };
 
 export const defaultSettings = (): WorkspaceSettings => ({
  personalizationEnabled: false, customInstructions: '', memory: '',
- workResponseStyle: 'plan-first', skills: [],
+ workResponseStyle: 'plan-first', browserTarget: 'current', browserPermission: 'ask', skills: [],
 });
 
-const fields = new Set(['personalizationEnabled', 'customInstructions', 'memory', 'workResponseStyle', 'skills']);
+const fields = new Set(['personalizationEnabled', 'customInstructions', 'memory', 'workResponseStyle', 'browserTarget', 'browserPermission', 'skills']);
 function invalid(message: string): never { throw new BillingError(message, 400); }
 
 export function validateSettingsPatch(value: unknown): Partial<WorkspaceSettings> {
@@ -35,6 +37,14 @@ export function validateSettingsPatch(value: unknown): Partial<WorkspaceSettings
  if ('workResponseStyle' in input) {
   if (input.workResponseStyle !== 'plan-first' && input.workResponseStyle !== 'direct') invalid('Choose plan-first or direct work responses.');
   patch.workResponseStyle = input.workResponseStyle;
+ }
+ if ('browserTarget' in input) {
+  if (input.browserTarget !== 'current' && input.browserTarget !== 'remote') invalid('Choose current or remote browser preference.');
+  patch.browserTarget = input.browserTarget;
+ }
+ if ('browserPermission' in input) {
+  if (input.browserPermission !== 'ask' && input.browserPermission !== 'approve') invalid('Choose ask or approve browser permission preference.');
+  patch.browserPermission = input.browserPermission;
  }
  if ('skills' in input) {
   if (!Array.isArray(input.skills) || input.skills.length > 20) invalid('Save at most 20 skills.');
