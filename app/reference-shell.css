@@ -452,7 +452,7 @@ body:has(.gemini-shell) {
   color: var(--prism-ink);
   font-family: inherit;
   font-size: 36px;
-  line-height: 44px;
+  line-height: 48px;
   font-weight: 400;
   letter-spacing: 0;
   text-align: center;
@@ -478,11 +478,11 @@ body:has(.gemini-shell) {
   display: block;
   width: 100%;
   min-width: 0;
-  height: 40px;
-  min-height: 40px;
+  height: 24px;
+  min-height: 24px;
   max-height: 144px;
   margin: 0;
-  padding: 8px 0;
+  padding: 0;
   overflow: auto;
   border: 0;
   border-radius: 0;
@@ -590,47 +590,59 @@ body:has(.gemini-shell) {
 @media (max-width: 767px) {
   .app-shell.gemini-shell,
   .app-shell.gemini-shell.sidebar-collapsed { --prism-sidebar-width: 0px; }
-  .gemini-shell .sidebar.gemini-sidebar { width: min(288px, calc(100vw - 40px)); transform: translateX(-100%); }
+  .app-shell.gemini-shell,
+  .gemini-shell .main-shell.gemini-workspace,
+  .gemini-shell .sidebar.gemini-sidebar { height: var(--prism-viewport-height, 100dvh); }
+  .gemini-shell .sidebar.gemini-sidebar { width: min(288px, calc(100vw - 40px)); transform: translateX(-100%); padding-top: env(safe-area-inset-top, 0px); }
   .gemini-shell.sidebar-open .sidebar.gemini-sidebar { transform: translateX(0); }
   .gemini-shell .sidebar-backdrop { display: none; }
   .gemini-shell.sidebar-open .sidebar-backdrop { position: fixed; z-index: 49; inset: 0; display: block; background: rgb(0 0 0 / 45%); backdrop-filter: blur(2px); }
   .gemini-shell .main-shell.gemini-workspace { width: 100%; margin-left: 0; }
   .gemini-shell .gemini-workspace::before { left: 0; background-size: auto; }
-  .gemini-shell .gemini-topbar { height: 60px; padding: 12px; }
+  .gemini-shell .gemini-topbar { flex-basis: calc(60px + env(safe-area-inset-top, 0px)); height: calc(60px + env(safe-area-inset-top, 0px)); padding: calc(8px + env(safe-area-inset-top, 0px)) max(8px, env(safe-area-inset-right, 0px)) 8px max(8px, env(safe-area-inset-left, 0px)); }
   .gemini-shell .gemini-mobile-toggle { display: inline-flex; color: var(--prism-ink); }
   .gemini-shell .gemini-top-actions { gap: 10px; }
-  .gemini-shell .gemini-install { min-width: 36px; width: 36px; padding: 0; margin-right: 0; }
+  .gemini-shell .gemini-install { min-width: 44px; width: 44px; height: 44px; padding: 0; margin-right: 0; }
   .gemini-shell .gemini-install > span { display: none; }
-  .gemini-shell .gemini-pdf-group { width: 118px; height: 36px; }
+  .gemini-shell .gemini-pdf-group { width: 128px; height: 44px; }
+  .gemini-shell .gemini-pdf-settings { width: 44px; flex-shrink: 0; }
   .gemini-shell .gemini-new-button { display: none; }
-  .gemini-shell .gemini-welcome { padding-inline: 16px; }
-  .gemini-shell .gemini-welcome-inner { padding-top: max(48px, calc(46dvh - 168px)); padding-bottom: 32px; }
+  .gemini-shell .gemini-welcome { min-height: calc(var(--prism-viewport-height, 100dvh) - 60px - env(safe-area-inset-top, 0px)); padding-inline: max(16px, env(safe-area-inset-left, 0px)) max(16px, env(safe-area-inset-right, 0px)); }
+  .gemini-shell .gemini-welcome-inner { padding-top: max(24px, calc(var(--prism-viewport-height, 100dvh) * .46 - 168px)); padding-bottom: max(24px, env(safe-area-inset-bottom, 0px)); }
   .gemini-shell .gemini-welcome-inner > h1 { margin-bottom: 36px; font-size: 28px; line-height: 38px; }
-  .gemini-shell .gemini-composer { grid-template-columns: 32px minmax(0, 1fr) auto; gap: 4px; min-height: 60px; padding: 10px 8px; border-radius: 30px; }
-  .gemini-shell .gemini-composer textarea.gemini-prompt { font-size: 16px; }
+  .gemini-shell .gemini-composer { grid-template-columns: 44px minmax(0, 1fr) auto; grid-template-rows: minmax(40px, auto) 44px; gap: 4px; min-height: 108px; padding: 8px; border-radius: 28px; }
+  .gemini-shell .gemini-composer textarea.gemini-prompt { grid-column: 1 / -1; grid-row: 1; padding: 0 12px; min-height: 24px; font-size: 16px; }
+  .gemini-shell .gemini-add { grid-column: 1; grid-row: 2; }
+  .gemini-shell .gemini-composer-actions { grid-column: 3; grid-row: 2; }
   .gemini-shell .gemini-composer-actions { gap: 2px; padding-right: 0; }
-  .gemini-shell .gemini-model-trigger { gap: 4px; min-width: 0; max-width: 112px; padding: 0 6px; font-size: 12px; }
+  .gemini-shell .gemini-model-trigger { gap: 4px; min-width: 44px; max-width: 132px; min-height: 44px; padding: 0 8px; font-size: 13px; }
+  .gemini-shell :is(.gemini-add, .gemini-mic, .gemini-send, .gemini-mobile-toggle, .sidebar-tools > button) { flex-basis: 44px; width: 44px; height: 44px; }
+  .gemini-shell .gemini-brand-row { flex-basis: 60px; height: 60px; }
+  .gemini-shell :is(.gemini-nav-item, .gemini-notebooks > button, .gemini-recent > button) { height: auto; min-height: 44px; }
+  .gemini-shell .gemini-account-row { padding-bottom: max(10px, env(safe-area-inset-bottom, 0px)); }
+  .gemini-shell .gemini-account-row :is(.prism-settings-trigger, .gemini-settings-trigger) { width: 44px; height: 44px; margin-top: 0; }
   .gemini-shell .gemini-model-trigger > svg { width: 14px; height: 14px; }
   .gemini-shell .gemini-mode-switch { margin-top: 14px; }
+  .gemini-shell .gemini-mode-switch > button { min-height: 44px; }
   /* A previously collapsed desktop rail still opens as a full mobile drawer. */
   .gemini-shell.sidebar-collapsed .gemini-brand-row { justify-content: flex-start; padding: 8px 10px 8px 14px; }
   .gemini-shell.sidebar-collapsed .gemini-brand { display: inline-flex; }
   .gemini-shell.sidebar-collapsed .sidebar-tools { margin-left: auto; }
   .gemini-shell.sidebar-collapsed .sidebar-tools > button:first-child { display: inline-flex; }
-  .gemini-shell.sidebar-collapsed .gemini-nav-item { justify-content: flex-start; height: 32px; min-height: 32px; padding: 0 4px; }
+  .gemini-shell.sidebar-collapsed .gemini-nav-item { justify-content: flex-start; height: auto; min-height: 44px; padding: 0 4px; }
   .gemini-shell.sidebar-collapsed .gemini-nav-item > span,
   .gemini-shell.sidebar-collapsed .gemini-notebooks,
   .gemini-shell.sidebar-collapsed .gemini-account > span:nth-child(2) { display: block; }
   .gemini-shell.sidebar-collapsed .gemini-activity { display: flex; }
   .gemini-shell.sidebar-collapsed .gemini-recent { display: block; }
-  .gemini-shell.sidebar-collapsed .gemini-account-row { flex-direction: row; gap: 4px; padding: 10px 10px 10px 14px; }
+  .gemini-shell.sidebar-collapsed .gemini-account-row { flex-direction: row; gap: 4px; padding: 10px 10px max(10px, env(safe-area-inset-bottom, 0px)) 14px; }
   .gemini-shell.sidebar-collapsed .gemini-account { flex: 1 1 auto; min-height: 44px; }
-  .gemini-shell.sidebar-collapsed .gemini-account-row :is(.prism-settings-trigger, .gemini-settings-trigger) { margin-top: 8px; }
+  .gemini-shell.sidebar-collapsed .gemini-account-row :is(.prism-settings-trigger, .gemini-settings-trigger) { margin-top: 0; }
 }
 
 @media (max-width: 380px) {
-  .gemini-shell .gemini-model-trigger { max-width: 90px; }
-  .gemini-shell .gemini-pdf-group { width: 110px; }
+  .gemini-shell .gemini-model-trigger { max-width: 112px; }
+  .gemini-shell .gemini-pdf-group { width: 118px; }
 }
 
 @media (max-height: 540px) and (min-width: 768px) {

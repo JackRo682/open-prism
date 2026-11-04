@@ -25,9 +25,13 @@ export interface SettingsPagesProps {
   onNavigate: (path: string) => void;
   onNotice?: (message: string) => void;
   onError?: (message: string) => void;
+  remoteConfigured?: boolean;
+  scheduledReady?: boolean;
+  codeExecutionConfigured?: boolean;
 }
 
 const pageTitles: Record<string, [string, string]> = {
+  '/customize': ['맞춤설정', '나에게 맞는 답변과 작업 방식을 설정하세요.'],
   '/personalization-settings': ['개인 인텔리전스', '답변에 반영할 나의 정보와 지침을 관리하세요.'],
   '/gemini-spark': ['작업 설정', '작업 모드의 답변 방식을 설정하세요.'],
   '/browser-settings': ['브라우저', '현재 브라우저와 원격 작업 기능의 연결 상태입니다.'],
@@ -140,13 +144,13 @@ function PersonalizationPage({ onNavigate, onNotice }: Pick<SettingsPagesProps, 
   </>;
 }
 
-function WorkPage({ onNotice }: Pick<SettingsPagesProps, 'onNotice'>) {
+function WorkPage({ onNotice, scheduledReady, codeExecutionConfigured }: Pick<SettingsPagesProps, 'onNotice'|'scheduledReady'|'codeExecutionConfigured'>) {
   const { settings, setSettings, error, saving, save, retry } = useSettings();
   if (!settings) return <LoadingOrError error={error} retry={retry} />;
   return <>
     <section className="prism-setting-card"><h2>작업 답변 방식</h2><p>작업 모드에서 사용할 답변 지침을 설정합니다. 이 지침은 서버에서 AI 요청에 반영합니다.</p><label className="prism-settings-field" htmlFor="prism-work-style">진행 방식<select id="prism-work-style" value={settings.workResponseStyle} disabled={saving} onChange={(event) => setSettings({ ...settings, workResponseStyle: event.target.value as WorkspaceSettings['workResponseStyle'] })}><option value="plan-first">계획을 먼저 설명</option><option value="direct">결과부터 설명</option></select></label><div className="prism-setting-actions"><button className="prism-action-button primary" disabled={saving} onClick={async () => { if (await save({ workResponseStyle: settings.workResponseStyle })) onNotice?.('작업 설정을 저장했습니다.'); }}>{saving ? <LoaderCircle size={16} className="spin" /> : null}{saving ? '저장 중…' : '저장'}</button></div><ErrorMessage message={error} /></section>
-    <section className="prism-setting-card"><div className="prism-setting-row"><div><h2>원격 코드 실행</h2><p>현재 Prism은 대화로 계획과 코드를 제공합니다. 원격 실행 환경이 연결되어 있지 않아 코드를 실행하거나 외부 작업을 수행하지 않습니다.</p></div><span className="prism-status-pill">연결 안 됨</span></div></section>
-    <section className="prism-setting-card"><h2>작업 전달</h2><p>답변은 현재 대화에 표시됩니다. 백그라운드 실행 및 예약 작업은 아직 연결되어 있지 않습니다.</p></section>
+    <section className="prism-setting-card"><div className="prism-setting-row"><div><h2>원격 코드 실행</h2><p>{codeExecutionConfigured?'작업에 필요하면 격리된 Python 환경에서 코드를 실행하고 계산 결과와 생성 파일을 대화에 저장합니다. 외부 사이트나 기기를 조작하지 않습니다.':'코드 실행 서비스 연결이 필요합니다. 현재는 계획과 코드를 답변으로 받을 수 있습니다.'}</p></div><span className="prism-status-pill">{codeExecutionConfigured?'연결됨':'연결 필요'}</span></div></section>
+    <section className="prism-setting-card"><h2>작업 전달</h2><p>작업 결과는 대화 기록에 저장됩니다. 예약됨에서 작업을 만들고 지금 실행할 수 있습니다. {scheduledReady?'저장한 일정에 맞춰 자동으로 실행됩니다.':'자동 실행은 예약 실행 서비스 연결 후 활성화할 수 있습니다.'}</p><a className="prism-action-button" href="/scheduled">예약 작업 관리 <ChevronRight size={15}/></a></section>
   </>;
 }
 
@@ -252,13 +256,19 @@ export function UnavailableFeaturePage({ feature, onNavigate }: { feature: 'imag
 
 export function SettingsPages(props: SettingsPagesProps) {
   const { pathname, signedIn, onNavigate } = props;
-  if (pathname === '/browser-settings') return <BrowserSettingsPage signedIn={signedIn} onNotice={props.onNotice} />;
+  if (pathname === '/browser-settings') return <BrowserSettingsPage signedIn={signedIn} onNotice={props.onNotice} remoteConfigured={props.remoteConfigured} onNavigate={onNavigate} />;
   const [title, description] = pageTitles[pathname] || ['공유한 대화', ''];
   const needsAccount = ['/personalization-settings', '/gemini-spark', '/customize/skills', '/import', '/sharing'].includes(pathname);
   let page: ReactNode;
-  if (needsAccount && !signedIn) page = <SignInCard pathname={pathname} />;
+  if (pathname === '/customize') page = <div className="prism-customize-grid">{[
+    {path:'/personalization-settings',title:'개인 인텔리전스',text:'선호하는 답변 방식과 기억할 정보를 설정하세요.',icon:ShieldCheck},
+    {path:'/customize/skills',title:'스킬',text:'자주 쓰는 지침을 저장하고 대화에서 불러오세요.',icon:ScrollText},
+    {path:'/gemini-spark',title:'작업 설정',text:'계획과 결과를 전달하는 방식을 선택하세요.',icon:Globe2},
+    {path:'/import',title:'메모리 가져오기',text:'다른 서비스의 메모리를 검토한 뒤 가져오세요.',icon:FileText},
+  ].map(item=><button className="prism-setting-card prism-customize-card" key={item.path} onClick={()=>onNavigate(item.path)}><item.icon size={25}/><h2>{item.title}</h2><p>{item.text}</p><ChevronRight size={18}/></button>)}</div>;
+  else if (needsAccount && !signedIn) page = <SignInCard pathname={pathname} />;
   else if (pathname === '/personalization-settings') page = <PersonalizationPage onNavigate={onNavigate} onNotice={props.onNotice} />;
-  else if (pathname === '/gemini-spark') page = <WorkPage onNotice={props.onNotice} />;
+  else if (pathname === '/gemini-spark') page = <WorkPage onNotice={props.onNotice} scheduledReady={props.scheduledReady} codeExecutionConfigured={props.codeExecutionConfigured} />;
   else if (pathname === '/customize/skills') page = <SkillsPage onNotice={props.onNotice} />;
   else if (pathname === '/gems/view') page = <section className="prism-setting-card prism-capability-state"><Diamond size={32} /><h2>맞춤 지침은 스킬에서 관리하세요</h2><p>저장한 스킬을 대화에 불러와 원하는 답변 방식을 적용할 수 있습니다.</p><button className="prism-action-button primary" onClick={() => onNavigate('/customize/skills')}>스킬로 이동 <ChevronRight size={15} /></button></section>;
   else if (pathname === '/import') page = <ImportPage onNotice={props.onNotice} />;

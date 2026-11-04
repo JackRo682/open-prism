@@ -29,6 +29,20 @@
       "when": 1793791579013,
       "tag": "0003_workspace_settings_and_shares",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1793817600004,
+      "tag": "0004_workspace_features",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1793817600005,
+      "tag": "0005_media_and_browser",
+      "breakpoints": true
     }
   ]
 }

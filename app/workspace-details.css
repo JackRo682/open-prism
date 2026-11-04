@@ -22,3 +22,46 @@
 .prism-chat-actions{display:flex;align-items:center;gap:16px}.prism-chat-actions button{display:flex;align-items:center;gap:6px;color:var(--prism-muted);font-size:12px}.prism-chat-actions button:hover{color:var(--prism-ink)}.prism-share-url-label{display:grid;gap:8px;font-size:13px;margin-top:20px}.prism-share-url-label input{padding:12px;border:1px solid var(--prism-border);border-radius:12px;background:var(--prism-page);color:var(--prism-ink);font-size:13px;width:100%}
 .prism-compare-effort{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--prism-muted)}.prism-compare-effort select{color:var(--prism-ink);background:var(--prism-composer);border:0;font:inherit;max-width:90px}
 @media(max-width:767px){.gemini-shell .sidebar.gemini-sidebar{overflow-y:auto;overscroll-behavior:contain}.gemini-shell .gemini-account-row{flex-shrink:0}}
+
+/* The shared backdrop is at 120 in settings.css. Dialogs must sit above it. */
+.prism-dialog-content { z-index: 121; }
+
+/* Touch controls and overlays stay reachable when the on-screen keyboard opens. */
+@media (max-width: 767px) {
+  .gemini-shell .conversation-screen { min-height: calc(var(--prism-viewport-height, 100dvh) - 60px - env(safe-area-inset-top, 0px)); }
+  .gemini-shell .chat-composer { padding-bottom: max(12px, env(safe-area-inset-bottom, 0px)); }
+  .gemini-shell .chat-toolbar { flex-wrap: wrap; gap: 8px; }
+  .gemini-shell .chat-toolbar > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .gemini-shell .message-body { min-width: 0; }
+  .gemini-shell .response-text { overflow-wrap: anywhere; }
+  .gemini-shell .response-text pre { max-width: 100%; overflow-x: auto; }
+  .gemini-shell .message-copy,
+  .prism-chat-actions button,
+  .gemini-shell .history-row .icon-button { min-width: 44px; min-height: 44px; }
+  .gemini-attachments { padding-inline: 4px; }
+  .gemini-attachments > span { min-width: 0; padding-block: 0; padding-right: 2px; }
+  .gemini-attachments > span > span { min-width: 0; max-width: none; }
+  .gemini-attachments button { width: 44px; height: 44px; flex-shrink: 0; }
+  .prism-tool-menu,
+  .prism-model-menu { max-height: min(var(--radix-popper-available-height, 100dvh), calc(var(--prism-viewport-height, 100dvh) - 24px)); overscroll-behavior: contain; }
+  html .prism-settings-menu { max-block-size: min(var(--radix-dropdown-menu-content-available-height, 100dvh), calc(var(--prism-viewport-height, 100dvh) - 24px)); }
+  html .prism-settings-menu .prism-settings-item,
+  .prism-tool-menu .prism-tool-item,
+  .prism-model-menu .prism-model-option,
+  .prism-model-menu .prism-model-library { min-height: 44px; }
+  .prism-model-menu .prism-icon,
+  .prism-tool-menu .prism-icon,
+  .prism-dialog-content .prism-icon { width: 44px; height: 44px; }
+  .prism-model-search input,
+  .prism-reasoning select,
+  .prism-dialog-content input,
+  .prism-dialog-content textarea { font-size: 16px; }
+  .prism-reasoning select { min-height: 44px; }
+  .prism-dialog-content { top: calc(var(--prism-viewport-height, 100dvh) / 2); max-height: calc(var(--prism-viewport-height, 100dvh) - 24px); }
+  html .prism-search-dialog,
+  html .prism-confirm-dialog { top: calc(var(--prism-viewport-height, 100dvh) / 2); max-block-size: calc(var(--prism-viewport-height, 100dvh) - 24px); }
+  html .prism-confirm-dialog { overflow-y: auto; }
+  html .prism-search-dialog .prism-search-results { min-block-size: 0; flex: 1; }
+  html .prism-dialog-close { flex-basis: 44px; inline-size: 44px; block-size: 44px; }
+  .prism-mention-menu { top: auto; bottom: calc(100% + 8px); max-height: min(240px, calc(var(--prism-viewport-height, 100dvh) - 180px)); }
+}

@@ -12,6 +12,11 @@ import { PrismMark, WorkspaceHeader, NotebookDialog } from '../components/worksp
 import { SettingsMenu } from '../components/workspace/settings-menu';
 import { SettingsPages } from '../components/workspace/settings-pages';
 import { ChatSearchDialog } from '../components/workspace/chat-search';
+import { TaskManager } from '../components/workspace/task-manager';
+import { NotebookPage } from '../components/workspace/notebook-page';
+import { BrowserSessionPage } from '../components/workspace/browser-session';
+import { DrivePickerDialog } from '../components/workspace/drive-picker';
+import { MusicWorkspace } from '../components/workspace/music-workspace';
 type Chat = {
     id: string;
     title: string;
@@ -30,8 +35,10 @@ type FileRecord = {
     size: number;
     created_at: number;
 };
+type MediaRecord = {id:string;kind:'image'|'video'|'music';status:'processing'|'complete'|'error';url:string;mimeType:string;prompt:string;error?:string;createdAt:number};
 type Bootstrap = {
-    capabilities?: { webResearch: boolean; image: boolean; video: boolean; remoteBrowser: boolean };
+    capabilities?: { webResearch: boolean; image: boolean; video: boolean; remoteBrowser: boolean; drive?: boolean; music?: boolean; scheduled?: boolean; codeExecution?: boolean };
+    mediaModels?:{image:string;video:string;music:string};
     beta?: boolean;
     models?: Model[];
     user: {
@@ -64,14 +71,17 @@ async function api(path: string, options?: RequestInit): Promise<any> { const r 
     d = await r.json();
 }
 catch {
-    throw new Error('The server could not return a response. Please retry.');
+    throw new Error('서버 응답을 읽지 못했습니다. 다시 시도해주세요.');
 } if (!r.ok)
-    throw new Error(d.error || 'Request failed.'); return d; }
+    throw new Error(d.error || '요청을 처리하지 못했습니다.'); return d; }
 const post = (data: unknown) => ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
 const number = (n: number) => new Intl.NumberFormat('en-US').format(n || 0);
 function TextResponse({ text }: {
     text: string;
-}) { return <div className="response-text">{text.split(/(```[\s\S]*?```)/g).map((part, i) => part.startsWith('```') ? <pre key={i}><code>{part.replace(/^```[^\n]*\n?/, '').replace(/```$/, '')}</code></pre> : <span key={i}>{part}</span>)}</div>; }
+}) { return <div className="response-text">{text.split(/(```[\s\S]*?```)/g).map((part, i) => part.startsWith('```') ? <pre key={i}><code>{part.replace(/^```[^\n]*\n?/, '').replace(/```$/, '')}</code></pre> : <span key={i}>{part.split(/(\[[^\]\n]{1,500}\]\((?:https?:\/\/|\/api\/artifacts\/)[^\s)]{1,4096}\))/g).map((segment,j)=>{
+    const match=/^\[([^\]]+)\]\(((?:https?:\/\/|\/api\/artifacts\/)[^\s)]+)\)$/.exec(segment);
+    return match?<a key={j} href={match[2]} target="_blank" rel="noopener noreferrer">{match[1]}</a>:segment;
+})}</span>)}</div>; }
 export default function Workspace() {
     const pathname = usePathname() || '/', router = useRouter();
     const rawView = pathname.split('/')[1] || 'chat', view = ({ library: 'history', pricing: 'billing', login: 'auth', signup: 'auth', 'forgot-password': 'auth', docs: 'faq' } as Record<string, string>)[rawView] || rawView, chatId = view === 'chat' ? pathname.split('/')[2] : undefined;
@@ -88,8 +98,12 @@ export default function Workspace() {
     const [compared, setCompared] = useState(['gpt-6-astra', 'claude-fable-5-1']), [results, setResults] = useState<Record<string, CompareResult>>({});
     const [workspaceMode, setWorkspaceMode] = useState<'chat' | 'work'>('chat');
     const [composerTool, setComposerTool] = useState<ComposerTool>('chat');
-    const [researchSources, setResearchSources] = useState({web:false});
+    const [researchSources, setResearchSources] = useState({web:true});
     const [videoAspect, setVideoAspect] = useState<'16:9'|'9:16'>('16:9');
+    const [mediaAssets,setMediaAssets]=useState<MediaRecord[]>([]);
+    const [mediaReference,setMediaReference]=useState<{id:string;name:string;url:string}|null>(null);
+    const [driveOpen,setDriveOpen]=useState(false);
+    const mediaUploadRef=useRef<HTMLInputElement>(null);
     const [canvasDrafts, setCanvasDrafts] = useState<Record<string,CanvasDraft>>({});
     const [searchOpen, setSearchOpen] = useState(false);
     const [collapsed, setCollapsed] = useState(false);
@@ -107,8 +121,52 @@ export default function Workspace() {
     const availableModels = boot.models ?? (boot.beta ? MODELS.filter(m => m.id === 'gpt-6.1-sol') : MODELS);
     const selected = findModel(modelId) || MODELS[3], connected = Object.values(boot.providers).filter(p => p.configured).length;
     const capabilities = boot.capabilities ?? {webResearch:false,image:false,video:false,remoteBrowser:false};
-    const activeTool = view === 'compare' ? 'chat' : composerTool;
+    const activeTool = view === 'compare' ? 'chat' : view === 'images' ? 'image' : view === 'videos' ? 'video' : composerTool;
     const canvasKey = 'prism-canvas:v1:' + encodeURIComponent(boot.user?.email || 'guest') + ':' + (chatId || runningId.current || 'draft');
+    function rememberDraft(){
+        try{sessionStorage.setItem('prism-signin-draft',JSON.stringify({prompt,tool:activeTool,workspaceMode,researchSources,videoAspect,savedAt:Date.now()}));}catch{}
+    }
+    useEffect(()=>{
+        if(!ready||!boot.user)return;
+        try{
+            const draft=JSON.parse(sessionStorage.getItem('prism-signin-draft')||'null');
+            if(draft&&typeof draft.prompt==='string'&&draft.prompt.length<=32000&&Date.now()-draft.savedAt<3600000){
+                setPrompt(draft.prompt);
+                if(['chat','canvas','research','learning','image','video'].includes(draft.tool))setComposerTool(draft.tool);
+                if(draft.workspaceMode==='work')setWorkspaceMode('work');
+                if(typeof draft.researchSources?.web==='boolean')setResearchSources({web:draft.researchSources.web});
+                if(draft.videoAspect==='9:16')setVideoAspect('9:16');
+            }
+            sessionStorage.removeItem('prism-signin-draft');
+        }catch{}
+    },[ready,boot.user?.email]);
+    useEffect(()=>{
+        const viewport=window.visualViewport;
+        if(!viewport)return;
+        const update=()=>{
+            if(window.innerWidth<=767&&Math.abs(viewport.scale-1)<0.02)document.documentElement.style.setProperty('--prism-viewport-height',`${viewport.height}px`);
+            else document.documentElement.style.removeProperty('--prism-viewport-height');
+        };
+        update();viewport.addEventListener('resize',update);window.addEventListener('resize',update);
+        return()=>{viewport.removeEventListener('resize',update);window.removeEventListener('resize',update);document.documentElement.style.removeProperty('--prism-viewport-height');};
+    },[]);
+    const loadMedia=useCallback(async()=>{const data=await api('media');setMediaAssets(data.assets||[]);},[]);
+    useEffect(()=>{
+        if(ready&&boot.user&&['images','videos','music'].includes(view))loadMedia().catch(cause=>setError(cause.message));
+    },[ready,boot.user?.email,view,loadMedia]);
+    const pendingMedia=mediaAssets.filter(asset=>asset.status==='processing').map(asset=>asset.id).join(',');
+    useEffect(()=>{
+        if(!boot.user||!pendingMedia)return;
+        const controller=new AbortController();let timer:ReturnType<typeof setTimeout>;let attempts=0;
+        const poll=async()=>{
+            const refreshed=await Promise.allSettled(pendingMedia.split(',').map(id=>api('media/'+id+'/refresh',{method:'POST',signal:controller.signal})));
+            if(controller.signal.aborted)return;
+            setMediaAssets(current=>current.map(asset=>{const index=pendingMedia.split(',').indexOf(asset.id);const value=refreshed[index];return value?.status==='fulfilled'?value.value:asset;}));
+            if(++attempts<60)timer=setTimeout(poll,10000);
+            else setNotice('생성 작업은 계속 진행됩니다. 페이지를 다시 열면 최신 결과를 확인할 수 있습니다.');
+        };
+        timer=setTimeout(poll,5000);return()=>{controller.abort();clearTimeout(timer);};
+    },[pendingMedia,boot.user?.email]);
     useEffect(() => {
         try {
             const stored = JSON.parse(sessionStorage.getItem(canvasKey) || 'null');
@@ -138,7 +196,9 @@ export default function Workspace() {
         if (busy) return;
         setComposerTool(tool);
         try { localStorage.setItem('prism-tool:' + (chatId || 'draft'), tool); } catch {}
-        if (view === 'images' || view === 'videos') go('/chat');
+        if (tool === 'image') { if(view !== 'images') go('/images'); }
+        else if(tool === 'video') { if(view !== 'videos') go('/videos'); }
+        else if (view === 'images' || view === 'videos') go('/chat');
     }
     const loadChats = useCallback(async () => { try {
         setChats(await api('conversations'));
@@ -220,7 +280,7 @@ export default function Workspace() {
         setRename(null);
     } }; window.addEventListener('keydown', fn); return () => window.removeEventListener('keydown', fn); }, [router]);
     const go = (path: string) => { if (busy && path !== pathname) {
-        setNotice('Stop the current response before switching pages.');
+        setNotice('진행 중인 응답을 중지한 뒤 다른 화면으로 이동해주세요.');
         return;
     } setMobile(false); router.push(path); };
     function choose(m: Model) { setModelId(m.id); setModelOpen(false); setModelQuery(''); }
@@ -229,10 +289,10 @@ export default function Workspace() {
         const r = await fetch('/api/chat', { ...post({ model, prompt, effort: findModel(model)?.efforts.includes(effort) ? effort : 'medium', pro: findModel(model)?.pro ? pro : false, conversationId, fileIds: attached, workspaceMode, skillId:selectedSkill?.id, tool: activeTool, researchSources }), signal });
         if (!r.ok) {
             const d: any = await r.json();
-            throw new Error(d.error || 'Unable to connect.');
+            throw new Error(d.error || '서버에 연결하지 못했습니다.');
         }
         if (!r.body)
-            throw new Error('Empty response.');
+            throw new Error('서버가 빈 응답을 반환했습니다.');
         const reader = r.body.getReader(), decoder = new TextDecoder();
         let buffer = '', doneEvent = false;
         try {
@@ -256,7 +316,7 @@ export default function Workspace() {
                     break;
             }
             if (!doneEvent)
-                throw new Error('The response ended before it completed.');
+                throw new Error('응답이 완료되기 전에 연결이 종료되었습니다.');
         }
         finally {
             reader.releaseLock();
@@ -271,9 +331,11 @@ export default function Workspace() {
         if (activeTool === 'video' && !capabilities.video) { setError('동영상 생성 서비스가 아직 연결되지 않았습니다. 프롬프트는 그대로 보관됩니다.'); return; }
         if (activeTool === 'research' && researchSources.web && !capabilities.webResearch) { setError('웹 리서치는 아직 연결되지 않았습니다. 소스에서 웹을 끄고 제공한 문서로 조사할 수 있습니다.'); return; }
         if (!boot.user) {
-            setError('Sign in to send messages and save your conversations.');
+            rememberDraft();
+            setError('메시지를 보내고 대화를 저장하려면 로그인해주세요. 작성한 내용은 그대로 보관됩니다.');
             return;
         }
+        if (activeTool === 'image' || activeTool === 'video') { await generateMedia(activeTool); return; }
         const targets = view === 'compare' ? compared : [modelId];
         if (targets.some(id => !boot.providers[findModel(id)!.provider].configured)) {
             setError('Connect ' + [...new Set(targets.filter(id => !boot.providers[findModel(id)!.provider].configured).map(id => PROVIDERS[findModel(id)!.provider].name))].join(' and ') + ' in Settings to start a real AI response.');
@@ -285,10 +347,10 @@ export default function Workspace() {
         if (view === 'compare') {
             setResults(Object.fromEntries(targets.map(id => [id, { text: '', loading: true }])));
             await Promise.allSettled(targets.map(async (id) => { try {
-                await stream(id, undefined, controller.signal, e => setResults(old => ({ ...old, [id]: { ...old[id], ...(e.type === 'delta' ? { text: old[id].text + e.text } : e.type === 'start' ? { conversationId: e.conversationId } : e.type === 'done' ? { loading: false, usage: e.usage } : {}) } })));
+                await stream(id, undefined, controller.signal, e => setResults(old => ({ ...old, [id]: { ...old[id], ...(e.type === 'delta' ? { text: old[id].text + e.text } : e.type === 'replace' ? { text: e.text } : e.type === 'start' ? { conversationId: e.conversationId } : e.type === 'done' ? { loading: false, usage: e.usage } : {}) } })));
             }
             catch (e) {
-                setResults(old => ({ ...old, [id]: { ...old[id], loading: false, error: e instanceof Error && e.name === 'AbortError' ? 'Response stopped.' : e instanceof Error ? e.message : 'Request failed.' } }));
+                setResults(old => ({ ...old, [id]: { ...old[id], loading: false, error: e instanceof Error && e.name === 'AbortError' ? '응답을 중지했습니다.' : e instanceof Error ? e.message : '요청을 처리하지 못했습니다.' } }));
             } }));
         }
         else {
@@ -296,12 +358,14 @@ export default function Workspace() {
             let started = false;
             setMessages(old => [...old, { id: userId, role: 'user', content: prompt }, { id: assistantId, role: 'assistant', content: '', model: modelId }]);
             try {
-                await stream(modelId, chatId, controller.signal, e => {
+                await stream(modelId, chatId || runningId.current, controller.signal, e => {
                     if (e.type === 'start') {
                         started = true;
                         runningId.current = e.conversationId;
                         try { localStorage.setItem('prism-tool:' + e.conversationId, e.tool || composerTool); } catch {}
                     }
+                    if (e.type === 'replace')
+                        setMessages(old => old.map(m => m.id === assistantId ? { ...m, content: e.text } : m));
                     if (e.type === 'delta')
                         setMessages(old => old.map(m => m.id === assistantId ? { ...m, content: m.content + e.text } : m));
                     if (e.type === 'done') {
@@ -313,28 +377,60 @@ export default function Workspace() {
                 });
             }
             catch (e) {
-                setError(e instanceof Error && e.name === 'AbortError' ? 'Response stopped. The provider may still charge for generated tokens.' : e instanceof Error ? e.message : 'Request failed.');
+                setError(e instanceof Error && e.name === 'AbortError' ? '응답을 중지했습니다. 이미 생성된 내용은 이용 한도에 포함될 수 있습니다.' : e instanceof Error ? e.message : '요청을 처리하지 못했습니다.');
                 if (!started)
                     setMessages(old => old.filter(m => m.id !== userId && m.id !== assistantId));
-                else
+                else {
                     setMessages(old => old.filter(m => m.id !== assistantId));
+                    if(!chatId && runningId.current)router.replace('/chat/'+runningId.current);
+                }
             }
         }
         setBusy(false);
         abortRef.current = null;
         loadChats();
     }
-    async function upload(file: File) { setUploading(true); setError(''); try {
+    async function generateMedia(kind:'image'|'video'|'music',description=prompt){
+        if(busy||!description.trim())return;
+        if(!boot.user){rememberDraft();setError('미디어를 생성하고 저장하려면 로그인해주세요.');return;}
+        const controller=new AbortController();abortRef.current=controller;setBusy(true);setError('');
+        try{
+            const result=await api('media',{...post({kind,prompt:description,aspect:videoAspect,referenceId:kind==='music'?undefined:mediaReference?.id}),signal:controller.signal});
+            setMediaAssets(current=>[result,...current.filter(asset=>asset.id!==result.id)]);
+            if(kind!=='music')setPrompt('');
+            setNotice(result.status==='processing'?'생성 요청이 접수되었습니다. 결과는 이 화면에 저장됩니다.':'생성한 파일을 저장했습니다.');
+        }catch(cause){
+            setError(cause instanceof Error&&cause.name==='AbortError'?'결과 수신을 중지했습니다. 이미 접수된 요청은 이용 한도에 포함될 수 있습니다. 다시 생성하기 전에 저장된 결과를 확인해주세요.':cause instanceof Error?cause.message:'미디어를 생성하지 못했습니다.');
+            loadMedia().catch(()=>{});
+        }finally{setBusy(false);abortRef.current=null;}
+    }
+    async function uploadReference(file:File){
+        if(!boot.user){setError('참고 이미지를 업로드하려면 로그인해주세요.');return;}
+        if(file.size>4*1024*1024||!['image/png','image/jpeg','image/webp'].includes(file.type)){setError('4 MB 이하의 PNG, JPEG, WebP 이미지를 선택해주세요.');return;}
+        setUploading(true);setError('');
+        try{const body=new FormData();body.append('file',file);const result=await api('media/reference',{method:'POST',body});
+            const previous=mediaReference;setMediaReference(result);
+            if(previous)api('media/'+previous.id,{method:'DELETE'}).catch(()=>{});
+        }catch(cause){setError(cause instanceof Error?cause.message:'참고 이미지를 저장하지 못했습니다.');}
+        finally{setUploading(false);if(mediaUploadRef.current)mediaUploadRef.current.value='';}
+    }
+    async function removeMediaReference(){
+        if(!mediaReference||busy)return;
+        try{await api('media/'+mediaReference.id,{method:'DELETE'});setMediaReference(null);}
+        catch(cause){setError(cause instanceof Error?cause.message:'참고 이미지를 제거하지 못했습니다.');}
+    }
+    async function upload(file: File, propagateError=false) { setUploading(true); setError(''); try {
         const f = new FormData();
         f.append('file', file);
         const created = await api('files', { method: 'POST', body: f });
         await loadFiles();
-        setNotice('File uploaded. It is ready to attach to a chat.');
+        setNotice('파일을 업로드했습니다. 대화에 첨부할 수 있습니다.');
         if (view === 'chat')
             setAttached(a => [...a, created.id].slice(-3));
     }
     catch (e) {
         setError((e as Error).message);
+        if(propagateError)throw e;
     }
     finally {
         setUploading(false);
@@ -370,21 +466,24 @@ export default function Workspace() {
     const sectionTitle: Record<string, string> = { chat: 'New chat', compare: 'Compare models', models: 'Model library', history: 'Chat history', files: 'My files', usage: 'Usage', settings: 'Settings', billing: '충전 및 잔액', admin: 'Administration', privacy: 'Privacy', terms: 'Terms', faq: 'Help & FAQ' };
     function providerStatus(p: Provider) { return <span className={'connection ' + (boot.providers[p].configured ? 'online' : '')}><i />{boot.providers[p].configured ? 'Configured' : 'Not connected'}</span>; }
     function modelCard(m: Model, index: number) { return <button key={m.id} className={'model-card provider-' + m.provider + (selected.id === m.id ? ' chosen' : '')} onClick={() => { choose(m); go('/chat'); }}><div className="card-top"><Mark provider={m.provider}/><span className={'tier ' + (m.tier === 'Advanced' ? 'premium' : '')}>{index === 0 && view === 'chat' ? <Sparkles size={11}/> : null}{m.tier}</span></div><h3>{m.name}</h3><p>{m.description}</p><div className="card-foot"><span>{m.category}</span><ArrowUpRight size={16}/></div></button>; }
-    const errorBanner = error && <div className="error-banner" role="alert"><AlertCircle size={17}/><span>{error}</span>{error.includes('Connect') || error.includes('not connected') ? <button onClick={() => go('/settings')}>Open settings <ArrowRight size={13}/></button> : !boot.user ? <a href="/signin-with-chatgpt?return_to=%2Fchat" target="_top">Sign in</a> : null}<button className="icon-button" aria-label="Dismiss error" onClick={() => setError('')}><X size={15}/></button></div>;
-    const composer = <Composer
+    const signInHref='/signin-with-chatgpt?return_to='+encodeURIComponent(pathname);
+    const errorBanner = error && <div className="error-banner" role="alert"><AlertCircle size={17}/><span>{error}</span>{error.includes('Connect') || error.includes('not connected') ? <button onClick={() => go('/settings')}>Open settings <ArrowRight size={13}/></button> : !boot.user ? <a href={signInHref} target="_top" data-prism-auth-link onClick={rememberDraft}>로그인</a> : null}<button className="icon-button" aria-label="오류 닫기" onClick={() => setError('')}><X size={15}/></button></div>;
+    const composer = <><Composer
       prompt={prompt} onPrompt={setPrompt} inputRef={inputRef}
       models={availableModels} selected={selected} onModel={choose} providers={boot.providers}
       effort={effort} onEffort={setEffort} mode={workspaceMode} compare={view === 'compare'}
       tool={activeTool} onTool={selectTool}
       researchSources={researchSources} onResearchSources={setResearchSources}
-      videoAspect={videoAspect} onVideoAspect={setVideoAspect} capabilities={capabilities}
+      videoAspect={videoAspect} onVideoAspect={setVideoAspect} capabilities={capabilities} mediaModelLabel={activeTool==='image'?boot.mediaModels?.image:boot.mediaModels?.video}
+      onDriveUpload={() => setDriveOpen(true)} onMusic={() => go('/music')}
+      onMediaUpload={() => mediaUploadRef.current?.click()} mediaReference={mediaReference||undefined} onRemoveMediaReference={removeMediaReference}
       showCapabilityNotice={view !== 'images' && view !== 'videos'}
       busy={busy} ready={ready} uploading={uploading} files={files} attached={attached}
       signedIn={!!boot.user} selectedSkill={selectedSkill} onSkill={setSelectedSkill}
       onAttach={id => setAttached(current => current.includes(id) ? current : [...current, id].slice(-3))}
       onDetach={id => setAttached(current => current.filter(value => value !== id))}
       onUpload={() => uploadRef.current?.click()} onSend={send}
-      onStop={() => abortRef.current?.abort()} onNavigate={go} onError={setError}/>;
+      onStop={() => abortRef.current?.abort()} onNavigate={go} onError={setError}/>{ready&&!boot.user&&<p className="prism-signin-hint"><a href={signInHref} target="_top" data-prism-auth-link onClick={rememberDraft}>ChatGPT로 로그인</a>하고 메시지를 보내세요. 작성 중인 내용은 보관됩니다.</p>}</>;
     function newChat() {
       if (busy) { setNotice('응답을 중지한 뒤 새 채팅을 시작해주세요.'); return; }
       setMobile(false);
@@ -416,19 +515,20 @@ export default function Workspace() {
       await loadFiles(); setAttached(current => [...current.filter(id => id !== created.id),created.id].slice(-3));
       setNotice('Canvas를 파일에 저장하고 다음 메시지에 첨부했습니다.');
     }
-    const secondaryView = ['personalization-settings', 'gemini-spark', 'browser-settings', 'customize', 'gems', 'import', 'sharing', 'share', 'scheduled', 'feedback'].includes(view);
+    const secondaryView = ['personalization-settings', 'gemini-spark', 'browser-settings', 'customize', 'gems', 'import', 'sharing', 'share', 'feedback'].includes(view);
     return <div className={'app-shell gemini-shell ' + (mobile ? 'sidebar-open ' : '') + (collapsed ? 'sidebar-collapsed' : '')}>
- <BrowserLinkGuard signedIn={!!boot.user}/>
+ <BrowserLinkGuard signedIn={!!boot.user} remoteConfigured={capabilities.remoteBrowser} onNavigate={go}/>
+ <input ref={mediaUploadRef} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={event=>{const file=event.target.files?.[0];if(file)void uploadReference(file);}}/>
  <input ref={uploadRef} type="file" accept=".txt,.md,.csv,.json,.ts,.tsx,.js,.jsx,.py,.html,.css,.xml,.yaml,.yml,.sql" hidden onChange={e => { const f = e.target.files?.[0]; if (f)
         upload(f); }}/>
- {mobile && <button className="sidebar-backdrop" aria-label="Close navigation" onClick={() => setMobile(false)}/>}
+ {mobile && <button className="sidebar-backdrop" aria-label="탐색 메뉴 닫기" onClick={() => setMobile(false)}/>}
  <aside ref={sidebarRef} className="sidebar gemini-sidebar" aria-label="주 탐색" role={mobile ? 'dialog' : undefined} aria-modal={mobile ? true : undefined}>
    <div className="gemini-brand-row"><a href="/chat" className="gemini-brand" aria-label="Prism 홈" onClick={event => { event.preventDefault(); newChat(); }}><PrismMark/><span>Prism</span></a><div className="sidebar-tools"><button type="button" aria-label="채팅 검색" onClick={() => setSearchOpen(true)}><Search size={18}/></button><button type="button" aria-label={collapsed ? '사이드바 펼치기' : '사이드바 접기'} onClick={() => { if (window.matchMedia('(max-width: 767px)').matches) setMobile(false); else setCollapsed(value => !value); }}>{collapsed ? <PanelLeftOpen size={17}/> : <PanelLeftClose size={17}/>}</button></div></div>
    <nav className="gemini-navigation">
      <button className="gemini-nav-item gemini-new-chat" onClick={newChat} title="새 채팅"><PenLine size={19}/><span>새 채팅</span></button>
-     {[{path:'/library',label:'라이브러리',icon:Grid2X2},{path:'/images',label:'이미지',icon:Image},{path:'/scheduled',label:'예약됨',icon:Clock3},{path:'/customize/skills',label:'맞춤설정',icon:Hexagon},{path:'/videos',label:'동영상',icon:Video}].map(item => <button key={item.path} className={'gemini-nav-item ' + (pathname === item.path ? 'is-active' : '')} onClick={() => go(item.path)} title={item.label}><item.icon size={19}/><span>{item.label}</span></button>)}
+     {[{path:'/library',label:'라이브러리',icon:Grid2X2},{path:'/images',label:'이미지',icon:Image},{path:'/scheduled',label:'예약됨',icon:Clock3},{path:'/customize',label:'맞춤설정',icon:Hexagon},{path:'/videos',label:'동영상',icon:Video}].map(item => <button key={item.path} className={'gemini-nav-item ' + (pathname === item.path ? 'is-active' : '')} onClick={() => go(item.path)} title={item.label}><item.icon size={19}/><span>{item.label}</span></button>)}
    </nav>
-   <section className="gemini-notebooks"><h2>노트북</h2><button className="gemini-nav-item" onClick={() => setNotebookOpen(true)} title="새 노트북"><Plus size={21}/><span>새 노트북</span></button>{files.filter(file => file.name.endsWith('.md')).slice(0,3).map(file => <button key={file.id} className="gemini-nav-item gemini-notebook-item" onClick={() => { setAttached([file.id]); go('/chat'); setNotice('노트북을 첨부했습니다.'); }} title={file.name}><NotebookPen size={17}/><span>{file.name.replace(/\.md$/, '')}</span></button>)}</section>
+   <section className="gemini-notebooks"><h2>노트북</h2><button className="gemini-nav-item" onClick={() => go('/notebooks/new')} title="새 노트북"><Plus size={21}/><span>새 노트북</span></button>{files.filter(file => file.name.endsWith('.md')).slice(0,3).map(file => <button key={file.id} className="gemini-nav-item gemini-notebook-item" onClick={() => { setAttached([file.id]); go('/chat'); setNotice('노트북을 첨부했습니다.'); }} title={file.name}><NotebookPen size={17}/><span>{file.name.replace(/\.md$/, '')}</span></button>)}</section>
    <button className="gemini-activity" onClick={() => go(boot.user ? '/history' : '/settings')}><History size={21}/><span>{boot.user ? 'Prism 채팅 기록이 저장됩니다' : 'Prism에 로그인하고 시작하세요'}<u>{boot.user ? '활동 및 대화 관리' : '여기에서 로그인'}</u></span></button>
    {chats.length > 0 && <section className="gemini-recent"><h2>최근</h2>{chats.slice(0,8).map(chat => <button key={chat.id} className={chatId === chat.id ? 'is-active' : ''} onClick={() => go('/chat/' + chat.id)} title={chat.title}>{chat.title}</button>)}</section>}
    <div className="gemini-account-row"><button className="gemini-account" onClick={() => go('/settings')}><span className="gemini-avatar">{boot.user?.name?.[0]?.toUpperCase() || 'P'}</span><span><strong>{boot.user?.name || 'Prism'}</strong><small>{boot.user ? boot.beta ? '무료 베타' : '개인 계정' : '로그인'}</small></span></button><SettingsMenu onNavigate={go} onHelp={() => setHelp(true)} signedIn={!!boot.user} beta={boot.beta} triggerClassName="gemini-settings-trigger"/></div>
@@ -436,7 +536,7 @@ export default function Workspace() {
  <div className="main-shell gemini-workspace" data-glow={view === 'chat' && messages.length === 0 && composerTool !== 'video'}><WorkspaceHeader onMenu={() => { if (window.matchMedia('(max-width: 767px)').matches) setMobile(true); else setCollapsed(false); }} onNew={newChat} onNotice={setNotice} showNavigation={collapsed}/>
  <main ref={mainRef} className={'main-content gemini-main view-' + view} onScroll={event => { const target = event.currentTarget; followBottom.current = target.scrollHeight - target.scrollTop - target.clientHeight < 120; }}>{errorBanner}
  {['history','files','models','compare'].includes(view) && <nav className="prism-library-nav" aria-label="라이브러리 종류">{[{path:'/history',label:'채팅'},{path:'/files',label:'파일 및 노트북'},{path:'/models',label:'AI 모델'},...(!boot.beta?[{path:'/compare',label:'모델 비교'}]:[])].map(item => <button key={item.path} onClick={() => go(item.path)} aria-current={view === item.path.slice(1) ? 'page' : undefined}>{item.label}</button>)}</nav>}
- {view === 'chat' && (messages.length === 0 ? <div className="gemini-welcome"><div className="gemini-welcome-inner"><h1>{workspaceMode === 'chat' ? '무엇을 도와드릴까요?' : '어떤 작업을 도와드릴까요?'}</h1>{composer}<div className="gemini-mode-switch" role="group" aria-label="작업 모드"><button type="button" aria-pressed={workspaceMode === 'chat'} className={workspaceMode === 'chat' ? 'selected' : ''} onClick={() => setWorkspaceMode('chat')}>채팅</button><button type="button" aria-pressed={workspaceMode === 'work'} className={workspaceMode === 'work' ? 'selected' : ''} onClick={() => setWorkspaceMode('work')}>작업</button></div></div></div> : <div className={composerTool === 'canvas' ? 'prism-canvas-layout' : 'prism-conversation-layout'}><div className="conversation-screen"><div className="chat-toolbar"><span><MessageSquare size={15}/> {chats.find(c => c.id === chatId)?.title || 'Your conversation'}</span><div className="prism-chat-actions">{chatId && <button disabled={busy} onClick={() => { setShareOpen(true); setShareUrl(''); setShareError(''); }}><Share2 size={15}/>공유</button>}<button onClick={exportChat}><Download size={14}/>내보내기</button></div></div><div className="messages">{messages.map(m => <div key={m.id} className={'message ' + m.role}>{m.role === 'assistant' ? <Mark provider={findModel(m.model || '')?.provider || selected.provider} size="small"/> : <span className="avatar">{boot.user?.name?.[0] || 'Y'}</span>}<div className="message-body"><h4>{m.role === 'user' ? 'You' : findModel(m.model || '')?.name || selected.name}</h4>{m.content ? <TextResponse text={m.content}/> : <div className="thinking"><LoaderCircle size={15} className="spin"/> Thinking it through…</div>}{m.content && <button className="message-copy" onClick={() => copy(m.content)}><Copy size={13}/> Copy</button>}</div></div>)}<div ref={endRef}/></div><div className="chat-composer">{composer}</div></div>{composerTool === 'canvas' && <CanvasPanel key={canvasKey} draft={canvasDrafts[canvasKey]} onDraftChange={updateCanvasDraft} text={[...messages].reverse().find(message => message.role === 'assistant')?.content || ''} busy={busy} onRevise={reviseCanvas} onSave={saveCanvas} onError={setError}/>}</div>)}
+ {view === 'chat' && (messages.length === 0 ? <div className="gemini-welcome"><div className="gemini-welcome-inner"><h1>{workspaceMode === 'chat' ? '무엇을 도와드릴까요?' : '어떤 작업을 도와드릴까요?'}</h1>{composer}{activeTool === 'chat' && <div className="gemini-mode-switch" role="group" aria-label="작업 모드"><button type="button" aria-pressed={workspaceMode === 'chat'} className={workspaceMode === 'chat' ? 'selected' : ''} onClick={() => setWorkspaceMode('chat')}>채팅</button><button type="button" aria-pressed={workspaceMode === 'work'} className={workspaceMode === 'work' ? 'selected' : ''} onClick={() => setWorkspaceMode('work')}>작업</button></div>}</div></div> : <div className={composerTool === 'canvas' ? 'prism-canvas-layout' : 'prism-conversation-layout'}><div className="conversation-screen"><div className="chat-toolbar"><span><MessageSquare size={15}/> {chats.find(c => c.id === chatId)?.title || '내 대화'}</span><div className="prism-chat-actions">{chatId && <button disabled={busy} onClick={() => { setShareOpen(true); setShareUrl(''); setShareError(''); }}><Share2 size={15}/>공유</button>}<button onClick={exportChat}><Download size={14}/>내보내기</button></div></div><div className="messages">{messages.map(m => <div key={m.id} className={'message ' + m.role}>{m.role === 'assistant' ? <Mark provider={findModel(m.model || '')?.provider || selected.provider} size="small"/> : <span className="avatar">{boot.user?.name?.[0] || 'Y'}</span>}<div className="message-body"><h4>{m.role === 'user' ? 'You' : findModel(m.model || '')?.name || selected.name}</h4>{m.content ? <TextResponse text={m.content}/> : <div className="thinking"><LoaderCircle size={15} className="spin"/> 답변을 작성하고 있습니다…</div>}{m.content && <button className="message-copy" onClick={() => copy(m.content)}><Copy size={13}/> Copy</button>}</div></div>)}<div ref={endRef}/></div><div className="chat-composer">{composer}</div></div>{composerTool === 'canvas' && <CanvasPanel key={canvasKey} draft={canvasDrafts[canvasKey]} onDraftChange={updateCanvasDraft} text={[...messages].reverse().find(message => message.role === 'assistant')?.content || ''} busy={busy} onRevise={reviseCanvas} onSave={saveCanvas} onError={setError}/>}</div>)}
  {view === 'compare' && !boot.beta && <div className="page-inner"><div className="page-heading"><span className="eyebrow">MORE PERSPECTIVES. BETTER DECISIONS.</span><h1>One question. Different minds.</h1><p>Send the same prompt to your models and compare real responses side by side.</p></div><div className="compare-selectors">{compared.map((id, i) => <div key={i} className="compare-select"><Mark provider={findModel(id)!.provider} size="small"/><select aria-label={'Comparison model ' + (i + 1)} disabled={busy} value={id} onChange={e => { if (compared.includes(e.target.value)) {
         setNotice('Choose a different model for each panel.');
         return;
@@ -446,7 +546,7 @@ export default function Workspace() {
  {view === 'files' && <div className="page-inner"><div className="page-heading row-heading"><div><span className="eyebrow">GIVE YOUR IDEAS SOME CONTEXT</span><h1>A home for your documents.</h1><p>Upload text and code, then bring them into any conversation.</p></div><button disabled={uploading} className="primary-button" onClick={() => uploadRef.current?.click()}>{uploading ? <LoaderCircle className="spin" size={16}/> : <Plus size={16}/>}Upload file</button></div><button className="drop-zone" onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); const file = e.dataTransfer.files[0]; if (file)
         upload(file); }} onClick={() => uploadRef.current?.click()}><span><FolderOpen size={28}/></span><strong>{uploading ? 'Uploading your document…' : 'Drop a little context here'}</strong><p>Drag a file, or click to browse</p><small>TXT, Markdown, CSV, JSON, and source code · Up to 128 KB · 100 files</small></button><div className="section-heading"><h2>Your files <span className="count-label">{files.length}</span></h2></div>{files.length ? <div className="history-list">{files.map(f => <div key={f.id} className="history-row"><span className="file-icon"><FileText size={20}/></span><div className="file-details"><strong>{f.name}</strong><small>{(f.size / 1024).toFixed(1)} KB · {new Date(f.created_at).toLocaleDateString()}</small></div><button className="text-button" onClick={() => { setAttached([f.id]); go('/chat'); setNotice('Document attached. Ask a question about it.'); }}>Use in chat <ArrowUpRight size={13}/></button><a className="icon-button" aria-label={'Download ' + f.name} href={'/api/files/' + f.id} download={f.name}><Download size={15}/></a><button className="icon-button danger-hover" aria-label={'Delete ' + f.name} onClick={() => setDeleteTarget({ kind: 'files', id: f.id, title: f.name })}><Trash2 size={15}/></button></div>)}</div> : <p className="empty-line">No documents yet. Your first upload will appear here.</p>}<p className="fine-print">Attached document text is sent to the provider you select. PDF and image parsing are not enabled in this release.</p></div>}
  {view === 'usage' && <div className="page-inner"><div className="page-heading row-heading"><div><span className="eyebrow">EVERY TOKEN, ACCOUNTED FOR</span><h1>A clear view of your usage.</h1><p>Actual provider token counts from your completed requests.</p></div><button className="secondary-button" onClick={() => api('usage').then(setUsage).catch(e => setError(e.message))}><RefreshCw size={14}/>Refresh</button></div><div className="stats-grid">{[{ label: 'Total requests', value: usage?.totals?.requests || 0, icon: MessageSquare, caption: 'All-time API requests' }, { label: 'Input tokens', value: usage?.totals?.input_tokens || 0, icon: ArrowUpRight, caption: 'Reported by your providers' }, { label: 'Output tokens', value: usage?.totals?.output_tokens || 0, icon: Sparkles, caption: 'Includes provider-reported reasoning' }].map(s => <div key={s.label} className="stat-card"><div>{s.label}<s.icon size={17}/></div><strong>{number(s.value)}</strong><small>{s.caption}</small></div>)}</div><section className="data-panel"><div className="section-heading"><h2>Usage by provider</h2><span>All time</span></div>{usage?.byProvider?.length ? usage.byProvider.map((p: any) => { const total = usage.byProvider.reduce((n: number, p: any) => n + p.input_tokens + p.output_tokens, 0) || 1; return <div key={p.provider} className="provider-usage"><Mark provider={p.provider} size="small"/><span>{PROVIDERS[p.provider as Provider].name}</span><div><i style={{ width: ((p.input_tokens + p.output_tokens) / total * 100) + '%' }}/></div><strong>{number(p.input_tokens + p.output_tokens)} tokens</strong></div>; }) : <Empty icon={<ChartNoAxesCombined />} title="Your story starts with a question." text="Send your first message to see real usage here."/>}</section><section className="data-panel"><div className="section-heading"><h2>Recent requests</h2><span>Last 50</span></div><div className="table-scroll"><table><thead><tr><th>Model</th><th>Tokens in / out</th><th>Duration</th><th>Status</th><th>Date</th></tr></thead><tbody>{usage?.recent?.map((r: any) => <tr key={r.id}><td>{findModel(r.model)?.name || r.model}</td><td>{number(r.input_tokens)} / {number(r.output_tokens)}</td><td>{r.status === 'pending' ? '—' : (r.duration / 1000).toFixed(1) + 's'}</td><td><span title={r.error || ''} className={'request-status ' + r.status}>{r.status}</span></td><td>{new Date(r.created_at).toLocaleDateString()}</td></tr>)}</tbody></table>{!usage?.recent?.length && <p className="empty-line">No API requests yet.</p>}</div></section><p className="fine-print">Provider invoices are authoritative. Token counts for interrupted or failed requests may be unavailable even when the provider charges for partial generation.</p></div>}
- {view === 'settings' && <div className="page-inner settings-page"><div className="page-heading"><span className="eyebrow">MAKE YOURSELF AT HOME</span><h1>Your workspace, your way.</h1><p>Manage your account and the AI providers that power your conversations.</p></div><section className="data-panel account-panel"><div className="section-heading"><h2>Personal account</h2><ShieldCheck size={16}/></div><div className="account-detail"><span className="avatar large">{boot.user?.name?.slice(0, 2).toUpperCase() || 'P'}</span><div><strong>{boot.user?.name || 'Welcome to Prism'}</strong><p>{boot.user?.email || 'Sign in with ChatGPT to save conversations across devices.'}</p></div>{boot.user ? <a className="secondary-button" href="/signout-with-chatgpt?return_to=%2F" target="_top"><LogOut size={14}/>Sign out</a> : <a className="primary-button" href="/signin-with-chatgpt?return_to=%2Fsettings" target="_top">Sign in with ChatGPT <ArrowUpRight size={14}/></a>}</div></section><div className="section-heading provider-heading"><div><h2>AI connections</h2><p>Keys are configured as server secrets and never sent to the browser.</p></div><span className="count-label">{connected} of 3</span></div>{(Object.entries(PROVIDERS) as [
+ {view === 'settings' && <div className="page-inner settings-page"><div className="page-heading"><span className="eyebrow">MAKE YOURSELF AT HOME</span><h1>Your workspace, your way.</h1><p>Manage your account and the AI providers that power your conversations.</p></div><section className="data-panel account-panel"><div className="section-heading"><h2>Personal account</h2><ShieldCheck size={16}/></div><div className="account-detail"><span className="avatar large">{boot.user?.name?.slice(0, 2).toUpperCase() || 'P'}</span><div><strong>{boot.user?.name || 'Welcome to Prism'}</strong><p>{boot.user?.email || 'Sign in with ChatGPT to save conversations across devices.'}</p></div>{boot.user ? <a className="secondary-button" href="/signout-with-chatgpt?return_to=%2F" target="_top"><LogOut size={14}/>Sign out</a> : <a className="primary-button" href="/signin-with-chatgpt?return_to=%2Fsettings" onClick={rememberDraft} target="_top">Sign in with ChatGPT <ArrowUpRight size={14}/></a>}</div></section><div className="section-heading provider-heading"><div><h2>AI connections</h2><p>Keys are configured as server secrets and never sent to the browser.</p></div><span className="count-label">{connected} of 3</span></div>{(Object.entries(PROVIDERS) as [
         Provider,
         typeof PROVIDERS[Provider]
     ][]).map(([p, v]) => <section className="provider-setting" key={p}><div className="provider-setting-top"><Mark provider={p}/><div><h3>{v.name}</h3><p>{v.description}</p></div>{providerStatus(p)}</div><div className="provider-secret"><code>{v.secret}</code><span>{boot.providers[p].configured ? 'Server secret is configured' : 'Add this server secret to enable live responses'}</span><a href={v.url} target="_blank" rel="noreferrer">Provider console <ArrowUpRight size={13}/></a></div></section>)}<div className="info-panel"><ShieldCheck size={20}/><div><strong>API access is separate from chat subscriptions.</strong><p>Prism connects directly to provider APIs. A ChatGPT, Claude, or Gemini consumer subscription does not supply API credits. Each provider needs an API account, an enabled model, and sufficient quota. Providers may charge for requests.</p><button className="text-button" onClick={() => go('/billing')}>View API billing information <ArrowRight size={13}/></button></div></div><div className="settings-links">{boot.user && <button className="danger-hover" onClick={async () => { if (!window.confirm('모든 대화와 업로드 파일을 삭제할까요? 결제·사용량 원장은 정산을 위해 보존되며 ChatGPT 계정은 삭제되지 않습니다.'))
@@ -475,12 +575,17 @@ export default function Workspace() {
         setError((e as Error).message);
     } }}>사용량 확인 후 정산</button>}</td></tr>)}</tbody></table></div></section></> : <Empty icon={<ShieldCheck />} title="Administrator access required" text="An administrator must set ADMIN_USER_ID to their authenticated account ID as a server secret."/>}</div>}
  {['privacy', 'terms', 'faq'].includes(view) && <div className="page-inner legal"><div className="page-heading"><span className="eyebrow">A LITTLE CLARITY</span><h1>{view === 'privacy' ? 'Your data in Prism.' : view === 'terms' ? 'How this workspace works.' : 'A few helpful answers.'}</h1><p>Release information · October 16, 2026</p></div>{(view === 'privacy' ? [['What is stored?', 'Your authenticated account ID, conversations, uploaded text files, and provider-reported usage are stored in this site’s database and object storage. Provider API keys are server secrets and are never returned to the browser.'], ['Where do prompts go?', 'When you send a message, your conversation context and selected attachments are transmitted to the provider you select. Comparison sends the prompt to every selected provider. Each provider’s own data processing terms apply.'], ['How can I delete my data?', 'Delete conversations from Chat history and documents from My files. Usage records remain for operational accounting and enforcing beta limits. Use Settings to delete all conversations and uploaded files. Avoid entering sensitive personal information. This does not delete your ChatGPT account. Accounting records remain for reconciliation; their retention and deletion policy must be finalized before commercial launch. Customer support is not configured yet.'], ['Deployment access', 'The site can be visited publicly. ChatGPT sign-in is required for AI requests and saved conversations. Data access is additionally checked by account ID on the server.']] : view === 'terms' ? [['Independent API workspace', 'Prism is an independent interface to third-party AI APIs. It is not ChatGPT, Claude, or the Gemini consumer app and does not transfer a consumer subscription or its benefits.'], ['Model access and usage', 'Models are available only when the configured API account has access and sufficient quota. Responses can be inaccurate. You are responsible for checking results and for using providers in accordance with their applicable terms.'], ['Charges and limits', 'Requests consume the configured provider’s API quota and may incur fees, including interrupted responses. Comparison makes a separate billable request for each selected model. Prism is being prepared for prepaid credit purchases of KRW 10,000, 30,000, or 50,000. No subscription renewals are used. Sales remain disabled until pricing, refunds, seller information, and merchant setup are complete.'], ['Before a public launch', 'Operator: 종합상사 루비; representative: 노휘석. Registration number, address, customer support, deduction rates, refund terms and credit validity are pending. Commercial sales are disabled. The free beta has server-enforced allowances and no customer payments.']] : [['Do I need ChatGPT Plus or Pro?', 'Prism uses API access, which is separate from ChatGPT subscriptions. You need ChatGPT sign-in to use AI and save conversations. The provider API account supplies the model access and quota.'], ['How do I choose a model?', 'Open the model selector below your message, or explore the Model library. The model label is the actual configured API model. You can change models within a conversation.'], ['What do Pro and Extra High do?', 'For supported OpenAI models, Pro selects the API reasoning mode and Extra High selects reasoning effort. They can increase latency and API usage. They do not reproduce every feature of a ChatGPT subscription.'], ['Can I compare answers?', 'Yes. Select two or three different models in Compare models, then send one prompt. Each real response is shown independently. Provider connections are required.'], ['Which files can I upload?', 'Plain text, Markdown, CSV, JSON, and supported source code files up to 128 KB. Attach up to three files per message. PDF and image processing are not enabled.'], ['Why does a provider say Not connected?', 'The matching API key has not been configured as a server secret. Settings shows the required secret names and provider console links. No synthetic AI replies are generated.']]).map(([title, text]) => <section className="legal-section" key={title}><h2>{title}</h2><p>{text}</p></section>)}</div>}
- {view === 'auth' && <div className="page-inner"><Empty icon={<ShieldCheck />} title="A workspace for your best ideas." text="Sign in with ChatGPT to save your conversations, compare models, and keep your documents together." action={<a className="primary-button" href="/signin-with-chatgpt?return_to=%2Fchat" target="_top">Continue with ChatGPT <ArrowUpRight size={15}/></a>}/><p className="fine-print">Authentication is managed by ChatGPT. Account creation and password recovery are handled there.</p></div>}
- {!secondaryView && !['chat', 'compare', 'models', 'history', 'files', 'usage', 'settings', 'billing', 'admin', 'privacy', 'terms', 'faq', 'auth', 'images', 'videos'].includes(view) && <Empty icon={<Search />} title="This page wandered off." text="Head back to your workspace to start again." action={<button className="primary-button" onClick={() => go('/chat')}>Back to workspace</button>}/>}
- {(view === 'images' || view === 'videos') && <MediaWorkspace key={view} kind={view === 'videos' ? 'video' : 'image'} composer={composer} onNavigate={go} onFocus={() => inputRef.current?.focus()}/>}
- {secondaryView && <SettingsPages pathname={pathname} signedIn={!!boot.user} onNavigate={go} onNotice={setNotice} onError={setError}/>}
+ {view === 'auth' && <div className="page-inner"><Empty icon={<ShieldCheck />} title="A workspace for your best ideas." text="Sign in with ChatGPT to save your conversations, compare models, and keep your documents together." action={<a className="primary-button" href="/signin-with-chatgpt?return_to=%2Fchat" onClick={rememberDraft} target="_top">Continue with ChatGPT <ArrowUpRight size={15}/></a>}/><p className="fine-print">Authentication is managed by ChatGPT. Account creation and password recovery are handled there.</p></div>}
+ {!secondaryView && !['chat', 'compare', 'models', 'history', 'files', 'usage', 'settings', 'billing', 'admin', 'privacy', 'terms', 'faq', 'auth', 'images', 'videos', 'music', 'scheduled', 'notebooks', 'browser'].includes(view) && <Empty icon={<Search />} title="This page wandered off." text="Head back to your workspace to start again." action={<button className="primary-button" onClick={() => go('/chat')}>Back to workspace</button>}/>}
+ {(view === 'images' || view === 'videos') && <MediaWorkspace key={view} kind={view === 'videos' ? 'video' : 'image'} composer={composer} onNavigate={go} onFocus={() => inputRef.current?.focus()} configured={view==='videos'?capabilities.video:capabilities.image} busy={busy||mediaAssets.some(asset=>asset.kind===(view==='videos'?'video':'image')&&asset.status==='processing')} results={mediaAssets.filter(asset=>asset.kind===(view==='videos'?'video':'image')&&asset.status==='complete')} />}
+ {secondaryView && <SettingsPages pathname={pathname} signedIn={!!boot.user} onNavigate={go} onNotice={setNotice} onError={setError} remoteConfigured={capabilities.remoteBrowser} scheduledReady={!!capabilities.scheduled} codeExecutionConfigured={!!capabilities.codeExecution}/>}
+ {view === 'scheduled' && <TaskManager signedIn={!!boot.user} onNavigate={go} modelId={modelId} onRunComplete={() => loadChats()}/>}
+ {view === 'notebooks' && <NotebookPage signedIn={!!boot.user} onNavigate={go} onAttach={(id:string) => {setAttached([id]);go('/chat');}} onFilesChanged={loadFiles}/>}
+ {view === 'browser' && <BrowserSessionPage signedIn={!!boot.user} remoteConfigured={capabilities.remoteBrowser} onNavigate={go}/>}
+ {view === 'music' && <MusicWorkspace configured={!!capabilities.music} signedIn={!!boot.user} busy={busy} assets={mediaAssets.filter(asset=>asset.kind==='music'&&asset.status==='complete')} onGenerate={text=>generateMedia('music',text)} onNavigate={go}/>}
  </main><footer className="app-footer"><span>{boot.beta ? 'Free beta · GPT-6.1 Sol · Daily allowance applies' : 'Room for your next big idea.'}</span><span>Made for curious minds <span className="footer-spark">✦</span></span></footer></div>
  <ChatSearchDialog open={searchOpen} onOpenChange={setSearchOpen} onNavigate={go} signedIn={!!boot.user}/>
+ <DrivePickerDialog open={driveOpen} onOpenChange={setDriveOpen} signedIn={!!boot.user} onFile={file=>upload(file,true)} onNavigate={go}/>
  <NotebookDialog open={notebookOpen} onOpenChange={setNotebookOpen} onCreate={createNotebook}/>
  {shareOpen && <Modal title="대화 공유" close={() => { if (!shareBusy) setShareOpen(false); }}><p className="modal-intro">공개 링크를 아는 누구나 현재 대화의 사본을 볼 수 있습니다. 첨부 파일 원문은 제외되지만, 메시지에 작성하거나 인용한 내용은 공개됩니다. 이후의 새 메시지는 추가되지 않습니다.</p>{shareUrl ? <><label className="prism-share-url-label">공개 링크<input readOnly value={shareUrl} onFocus={event => event.currentTarget.select()}/></label><div className="modal-actions"><button className="secondary-button" onClick={() => copy(shareUrl)}><Copy size={15}/>링크 복사</button><button className="primary-button" onClick={() => { setShareOpen(false); go('/sharing'); }}>공개 링크 관리</button></div></> : <><p className="fine-print">내 공개 링크에서 언제든지 공유를 취소할 수 있습니다.</p>{shareError && <p className="prism-form-error" role="alert">{shareError}</p>}<div className="modal-actions"><button className="secondary-button" disabled={shareBusy} onClick={() => setShareOpen(false)}>취소</button><button className="primary-button" disabled={shareBusy} onClick={createShare}>{shareBusy ? '생성 중…' : '공개 링크 만들기'}</button></div></>}</Modal>}
  {notice && <div className="toast" role="status"><CheckCircle2 size={16}/>{notice}</div>}

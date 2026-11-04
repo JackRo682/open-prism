@@ -5,17 +5,46 @@ import { invokeProvider, Turn } from '../../../lib/provider';
 import { BillingError, billingOverview, getBillingConfig, validateConfig, launchBlockers, paymentRequest, paymentWebhook, reserve, settle, cost } from '../../../lib/billing';
 import { reserveBeta, betaCost, BETA_OUTPUT, BETA_INPUT_BYTES } from '../../../lib/beta';
 import { getWorkspaceSettings, patchWorkspaceSettings, withWorkspaceContext, publicMessageContent } from '../../../lib/workspace-settings';
-import { workspaceCapabilities, validateToolRequest, withToolContext, WorkspaceToolError } from '../../../lib/workspace-tools';
+import { betaDailyLimit, getWorkspaceCapabilities, validateToolRequest, withToolContext, WorkspaceToolError } from '../../../lib/workspace-tools';
+import { handleMedia } from '../../../lib/media-workspace';
+import { handleBrowser } from '../../../lib/browser-workspace';
+import { handleScheduledTasks, runDueScheduledTasks, type ScheduledTaskExecutor } from '../../../lib/scheduled-tasks';
+import { deleteWorkArtifacts, handleWorkArtifact, storeWorkArtifacts } from '../../../lib/work-artifacts';
 export const dynamic='force-dynamic';
 const json=(data:unknown,status=200)=>Response.json(data,{status,headers:{'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
 const uid=()=>crypto.randomUUID();
 function mutationAllowed(req:Request){const origin=req.headers.get('origin');return !origin||origin===new URL(req.url).origin;}
 function db(){if(!env.DB)throw new Error('Database is not configured.');return env.DB;}
-async function handle(req:Request){
+const runnerReady=()=>env.SCHEDULE_RUNNER_ENABLED==='true'&&!!env.SCHEDULE_RUNNER_SECRET&&env.SCHEDULE_RUNNER_SECRET.length>=32;
+async function secretMatches(provided:string,expected:string){
+ const encode=new TextEncoder();
+ const [a,b]=await Promise.all([crypto.subtle.digest('SHA-256',encode.encode(provided)),crypto.subtle.digest('SHA-256',encode.encode(expected))]);
+ const left=new Uint8Array(a),right=new Uint8Array(b);let diff=0;
+ for(let i=0;i<left.length;i++)diff|=left[i]^right[i];return diff===0;
+}
+const executeScheduled:ScheduledTaskExecutor=async(task,request,owner)=>{
+ const internal=new Request(new URL('/api/chat',request.url),{method:'POST',headers:{'Content-Type':'application/json'},signal:request.signal,
+  body:JSON.stringify({model:task.model,prompt:task.prompt,workspaceMode:'work',effort:'medium',tool:'chat'})});
+ const response=await handle(internal,owner);
+ if(!response.ok){const data=await response.json() as {error?:string};throw new Error(data.error||'예약 작업을 실행하지 못했습니다.');}
+ const events=(await response.text()).split('\n').filter(line=>line.startsWith('data: ')).map(line=>JSON.parse(line.slice(6)));
+ const error=events.find(event=>event.type==='error');if(error)throw new Error(error.error);
+ const done=events.find(event=>event.type==='done');if(!done?.conversationId)throw new Error('완료된 작업 결과를 확인하지 못했습니다.');
+ return {conversationId:done.conversationId};
+};
+async function handle(req:Request,scheduledOwner?:string){
  const path=new URL(req.url).pathname.replace(/^\/api\//,'').split('/');
+ if(scheduledOwner&&!(path[0]==='chat'&&req.method==='POST'))return json({error:'허용하지 않는 작업입니다.'},403);
+ if(path.join('/')==='tasks/run-due'&&req.method==='POST'){
+  if(!runnerReady())return json({error:'자동 실행 서비스 연결이 필요합니다.',code:'SCHEDULE_RUNNER_NOT_CONFIGURED'},503);
+  const auth=req.headers.get('authorization')||'';
+  if(!auth.startsWith('Bearer ')||!await secretMatches(auth.slice(7),env.SCHEDULE_RUNNER_SECRET!))return json({error:'실행 권한이 없습니다.'},401);
+  return json(await runDueScheduledTasks(db(),req,executeScheduled,{limit:3}));
+ }
  if(path.join('/')==='health/live'&&req.method==='GET')return json({status:'ok',service:'open-prism'});
  if(path.join('/')==='health/ready'&&req.method==='GET'){
-  try{await db().prepare('SELECT id FROM usage LIMIT 1').first();}catch{return json({status:'unavailable',code:'DATABASE_NOT_READY'},503);}
+  try{await db().batch(['usage','scheduled_tasks','media_assets','browser_sessions','work_artifacts'].map(table=>db().prepare(`SELECT id FROM ${table} LIMIT 1`)));}catch{return json({status:'unavailable',code:'DATABASE_NOT_READY'},503);}
+  if(!env.BUCKET)return json({status:'unavailable',code:'STORAGE_NOT_READY'},503);
   if(!env.OPENAI_API_KEY)return json({status:'unavailable',code:'PROVIDER_NOT_READY'},503);
   return json({status:'ready',service:'open-prism'});
  }
@@ -27,10 +56,18 @@ async function handle(req:Request){
   return json({title:share.title,created_at:share.created_at,messages:JSON.parse(share.snapshot)});
  }
  const user=await getChatGPTUser();
- if(path[0]==='bootstrap'&&req.method==='GET')return json({user:user?{name:user.fullName||user.email.split('@')[0],email:user.email}:null,beta:env.BETA_MODE==='true',models:env.BETA_MODE==='true'?MODELS.filter(m=>m.id==='gpt-6.1-sol'):MODELS,providers:Object.fromEntries(Object.entries(PROVIDERS).map(([p,v])=>[p,{configured:!!env[v.secret as keyof typeof env]}])),capabilities:workspaceCapabilities,isAdmin:!!user&&!!env.ADMIN_USER_ID&&user.userId===env.ADMIN_USER_ID});
- if(!user)return json({error:'Sign in with ChatGPT to save your work and use AI models.'},401);
+ if(path[0]==='bootstrap'&&req.method==='GET')return json({user:user?{name:user.fullName||user.email.split('@')[0],email:user.email}:null,beta:env.BETA_MODE==='true',models:env.BETA_MODE==='true'?MODELS.filter(m=>m.id==='gpt-6.1-sol'):MODELS,providers:Object.fromEntries(Object.entries(PROVIDERS).map(([p,v])=>[p,{configured:!!env[v.secret as keyof typeof env]}])),mediaModels:{image:env.OPENAI_IMAGE_MODEL||'gpt-image-2.5-flare',video:env.GEMINI_VIDEO_MODEL||'gemini-omni-1.1-flash',music:env.GEMINI_MUSIC_MODEL||'lyria-3-clip-preview'},capabilities:{...getWorkspaceCapabilities(env),drive:!!(env.GOOGLE_DRIVE_CLIENT_ID&&env.GOOGLE_DRIVE_PICKER_KEY&&env.GOOGLE_DRIVE_APP_ID),remoteBrowser:!!env.BROWSERLESS_API_TOKEN,scheduled:runnerReady(),codeExecution:env.BETA_MODE==='true'&&!!env.OPENAI_API_KEY&&env.WORK_CODE_EXECUTION_ENABLED!=='false'},isAdmin:!!user&&!!env.ADMIN_USER_ID&&user.userId===env.ADMIN_USER_ID});
+ if(!user&&!scheduledOwner)return json({error:'메시지를 보내고 작업을 저장하려면 ChatGPT로 로그인해주세요.',code:'SIGN_IN_REQUIRED'},401);
  if(req.method!=='GET'&&!mutationAllowed(req))return json({error:'Invalid request origin.'},403);
- const owner=user.userId,sql=db();
+ const owner=scheduledOwner||user!.userId,sql=db();
+ if(path.join('/')==='integrations/drive'&&req.method==='GET'){
+  const configured=!!(env.GOOGLE_DRIVE_CLIENT_ID&&env.GOOGLE_DRIVE_PICKER_KEY&&env.GOOGLE_DRIVE_APP_ID);
+  return json(configured?{configured,clientId:env.GOOGLE_DRIVE_CLIENT_ID,developerKey:env.GOOGLE_DRIVE_PICKER_KEY,appId:env.GOOGLE_DRIVE_APP_ID}:{configured:false});
+ }
+ const mediaResponse=await handleMedia(req,path,sql,owner,env);if(mediaResponse)return mediaResponse;
+ const artifactResponse=await handleWorkArtifact(req,path,sql,owner,env);if(artifactResponse)return artifactResponse;
+ const browserResponse=await handleBrowser(req,path,sql,owner,env);if(browserResponse)return browserResponse;
+ const taskResponse=await handleScheduledTasks(req,path,sql,owner,executeScheduled,{runnerReady:runnerReady()});if(taskResponse)return taskResponse;
  if(path[0]==='settings'&&path.length===1){
   if(req.method==='GET')return json(await getWorkspaceSettings(sql,owner));
   if(req.method==='PATCH')return json(await patchWorkspaceSettings(sql,owner,await req.json()));
@@ -93,9 +130,10 @@ async function handle(req:Request){
  }
  if(path.join('/')==='account/data'&&req.method==='DELETE'){
   if(await sql.prepare("SELECT id FROM usage WHERE user_id=? AND status='pending'").bind(owner).first())return json({error:'진행 중인 응답이 끝난 뒤 삭제해주세요.'},409);
-  const owned=(await sql.prepare('SELECT key FROM files WHERE user_id=?').bind(owner).all<{key:string}>()).results;
+  if(await sql.prepare('SELECT id FROM scheduled_tasks WHERE user_id=? AND run_token IS NOT NULL AND locked_until>?').bind(owner,Date.now()).first())return json({error:'진행 중인 예약 작업이 끝난 뒤 삭제해주세요.'},409);
+  const owned=(await sql.prepare("SELECT key FROM files WHERE user_id=? UNION ALL SELECT object_key AS key FROM media_assets WHERE user_id=? AND object_key IS NOT NULL UNION ALL SELECT object_key AS key FROM work_artifacts WHERE user_id=?").bind(owner,owner,owner).all<{key:string}>()).results;
   for(const file of owned)await env.BUCKET?.delete(file.key);
-  await sql.batch([sql.prepare('DELETE FROM public_shares WHERE user_id=?').bind(owner),sql.prepare('DELETE FROM workspace_settings WHERE user_id=?').bind(owner),sql.prepare('DELETE FROM files WHERE user_id=?').bind(owner),sql.prepare('DELETE FROM messages WHERE conversation_id IN (SELECT id FROM conversations WHERE user_id=?)').bind(owner),sql.prepare('DELETE FROM conversations WHERE user_id=?').bind(owner)]);
+  await sql.batch([sql.prepare('DELETE FROM work_artifacts WHERE user_id=?').bind(owner),sql.prepare('DELETE FROM scheduled_tasks WHERE user_id=?').bind(owner),sql.prepare('DELETE FROM browser_sessions WHERE user_id=?').bind(owner),sql.prepare('DELETE FROM media_assets WHERE user_id=?').bind(owner),sql.prepare('DELETE FROM public_shares WHERE user_id=?').bind(owner),sql.prepare('DELETE FROM workspace_settings WHERE user_id=?').bind(owner),sql.prepare('DELETE FROM files WHERE user_id=?').bind(owner),sql.prepare('DELETE FROM messages WHERE conversation_id IN (SELECT id FROM conversations WHERE user_id=?)').bind(owner),sql.prepare('DELETE FROM conversations WHERE user_id=?').bind(owner)]);
   return json({ok:true,message:'대화와 파일을 삭제했습니다. 결제·사용량 원장은 정산을 위해 보존됩니다. ChatGPT 계정은 삭제되지 않습니다.'});
  }
  if(path[0]==='conversations'){
@@ -103,7 +141,11 @@ async function handle(req:Request){
   const id=path[1];if(!id)return json({error:'Conversation ID required.'},400);
   const chat=await sql.prepare('SELECT * FROM conversations WHERE id=? AND user_id=?').bind(id,owner).first();if(!chat)return json({error:'Conversation not found.'},404);
   if(req.method==='GET')return json({conversation:chat,messages:(await sql.prepare('SELECT id,role,content,model,created_at FROM messages WHERE conversation_id=? ORDER BY created_at,rowid').bind(id).all()).results});
-  if(req.method==='DELETE'){await sql.batch([sql.prepare('DELETE FROM messages WHERE conversation_id=?').bind(id),sql.prepare('DELETE FROM conversations WHERE id=? AND user_id=?').bind(id,owner)]);return json({ok:true});}
+  if(req.method==='DELETE'){
+   const artifacts=(await sql.prepare('SELECT id FROM work_artifacts WHERE conversation_id=? AND user_id=?').bind(id,owner).all<{id:string}>()).results;
+   await deleteWorkArtifacts(env,sql,owner,artifacts.map(file=>file.id));
+   await sql.batch([sql.prepare('UPDATE scheduled_tasks SET last_conversation_id=NULL WHERE last_conversation_id=? AND user_id=?').bind(id,owner),sql.prepare('DELETE FROM messages WHERE conversation_id=?').bind(id),sql.prepare('DELETE FROM conversations WHERE id=? AND user_id=?').bind(id,owner)]);return json({ok:true});
+  }
   if(req.method==='PATCH'){const b:any=await req.json();if(typeof b.title!=='string'||!b.title.trim()||b.title.length>100)return json({error:'Use a title between 1 and 100 characters.'},400);await sql.prepare('UPDATE conversations SET title=?,updated_at=? WHERE id=? AND user_id=?').bind(b.title.trim(),Date.now(),id,owner).run();return json({ok:true});}
  }
  if(path[0]==='usage'&&req.method==='GET'){
@@ -133,12 +175,17 @@ async function handle(req:Request){
   return json({totals:await sql.prepare('SELECT COUNT(*) AS requests,COUNT(DISTINCT user_id) AS users,SUM(input_tokens+output_tokens) AS tokens FROM usage').first(),logs:(await sql.prepare('SELECT id,model,provider,status,error,duration,created_at FROM usage ORDER BY created_at DESC LIMIT 100').all()).results});
  }
  if(path[0]==='chat'&&req.method==='POST'){
+  if(req.signal.aborted)return json({error:'요청이 취소되었습니다.'},408);
   if(Number(req.headers.get('content-length')||0)>100000)return json({error:'Request is too large.'},413);
   const body:any=await req.json();
   if(!body||typeof body!=='object'||Array.isArray(body))return json({error:'Provide a valid chat request.'},400);
   const model=findModel(body.model);
   if(!model||typeof body.prompt!=='string'||!body.prompt.trim()||body.prompt.length>32000)return json({error:'Choose a valid model and enter a prompt under 32,000 characters.'},400);
-  const {tool}=validateToolRequest(body);
+  const {tool,researchSources}=validateToolRequest(body,getWorkspaceCapabilities(env));
+  if(tool==='image'||tool==='video'||tool==='music')return json({error:'미디어 생성 화면에서 요청해주세요.',code:'USE_MEDIA_ENDPOINT'},400);
+  const webResearch=tool==='research'&&researchSources.web;
+  const codeExecution=body.workspaceMode==='work'&&tool==='chat'&&model.provider==='openai'&&env.BETA_MODE==='true'&&env.WORK_CODE_EXECUTION_ENABLED!=='false';
+  if(webResearch&&model.provider!=='openai')return json({error:'웹 리서치를 사용할 때는 연결된 OpenAI 모델을 선택해주세요.'},400);
   if(body.workspaceMode!==undefined&&body.workspaceMode!=='chat'&&body.workspaceMode!=='work')return json({error:'Choose chat or work mode.'},400);
   if(body.skillId!==undefined&&(typeof body.skillId!=='string'||!body.skillId||body.skillId.length>100))return json({error:'Select a valid saved skill.'},400);
   const effort=body.effort||'medium';if(model.efforts.length&&!model.efforts.includes(effort))return json({error:'This reasoning level is not supported by the selected model.'},400);
@@ -167,7 +214,8 @@ async function handle(req:Request){
    // rowid above also preserves insertion order for legacy equal-time messages.
    const userCreatedAt=Math.max(now,(historyRows.at(-1)?.created_at??(now-1))+1);
    const settings=await getWorkspaceSettings(sql,owner);
-   const providerPrompt=withToolContext(withWorkspaceContext(prompt,settings,body.workspaceMode||'chat',body.skillId),tool);
+   const providerPrompt=withToolContext(withWorkspaceContext(prompt,settings,body.workspaceMode||'chat',body.skillId),tool,researchSources)
+    +(codeExecution?'\n\nYou may use the supplied code_interpreter tool for Python calculations, analysis, and generating files in an isolated sandbox with network access disabled. Use it only when useful. Report actual execution results only after the tool succeeds. You cannot operate external apps, deploy sites, install software on the user device, or continue running after this response. Keep generated files below 5 MB each and at most three files; the application will preserve them for download.':'');
    const providerTurns:Turn[]=[...history,{role:'user',content:providerPrompt}];
    if(providerTurns.reduce((n,t)=>n+t.content.length,0)>240000)throw new Error('This conversation is too long. Start a new chat or use smaller documents.');
    // UTF-8 byte count bounds text tokens conservatively. Pro mode has no
@@ -175,38 +223,51 @@ async function handle(req:Request){
    if(body.pro)throw new BillingError('Pro 모드 단가는 별도 확정 전까지 사용할 수 없습니다.',503);
    const inputBound=new TextEncoder().encode(providerTurns.map(t=>t.content).join('')).length+4096;
    if(beta&&inputBound>BETA_INPUT_BYTES+4096)throw new BillingError('Beta conversations support up to 16 KB of total text. Start a new conversation or use a smaller document.',400);
-   reservation=beta?await reserveBeta(sql,owner,requestId,inputBound,now):cost(rate,inputBound,8192);
+   if(webResearch&&!beta)throw new BillingError('웹 검색이 포함된 요금 설정이 필요합니다.',503);
+   if(req.signal.aborted)throw new BillingError('요청이 취소되었습니다.',408);
+   reservation=beta?await reserveBeta(sql,owner,requestId,inputBound+(webResearch?32000:0),now,(webResearch?20000:0)+(codeExecution?60000:0),betaDailyLimit(env)):cost(rate,inputBound,8192);
    if(!beta)await reserve(sql,owner,requestId,reservation);
    await sql.batch([
     ...(!body.conversationId?[sql.prepare('INSERT INTO conversations (id,user_id,title,model,created_at,updated_at) VALUES (?,?,?,?,?,?)').bind(conversationId,owner,body.prompt.slice(0,80),model.id,now,now)]:[]),
     sql.prepare('INSERT INTO messages (id,conversation_id,role,content,model,created_at) VALUES (?,?,?,?,?,?)').bind(uid(),conversationId,'user',prompt,null,userCreatedAt),
     ...(!beta?[sql.prepare('INSERT INTO usage (id,user_id,model,provider,status,created_at,rate_snapshot,reserved_amount) VALUES (?,?,?,?,?,?,?,?)').bind(requestId,owner,model.id,model.provider,'pending',now,JSON.stringify(rate),reservation)]:[])
    ]);
-   const encoder=new TextEncoder(),aborter=new AbortController();const timer=setTimeout(()=>aborter.abort(),240000);req.signal.addEventListener('abort',()=>aborter.abort(),{once:true});
+   const encoder=new TextEncoder(),aborter=new AbortController();const timer=setTimeout(()=>aborter.abort(),240000);req.signal.addEventListener('abort',()=>aborter.abort(),{once:true});if(req.signal.aborted)aborter.abort();
    const stream=new ReadableStream({
     async start(controller){
-     let text='';const emit=(value:unknown)=>controller.enqueue(encoder.encode('data: '+JSON.stringify(value)+'\n\n'));
+     let text='';let artifactIds:string[]=[];let persisted=false;const emit=(value:unknown)=>controller.enqueue(encoder.encode('data: '+JSON.stringify(value)+'\n\n'));
      try{
       emit({type:'start',conversationId,model:model.id,tool});
+      if(aborter.signal.aborted)throw new DOMException('요청이 취소되었습니다.','AbortError');
       providerStarted=true;
-      const measured=await invokeProvider(model,key,providerTurns,effort,false,aborter.signal,delta=>{text+=delta;emit({type:'delta',text:delta});},beta?BETA_OUTPUT:8192);
-      if(beta){const charge=betaCost(measured.input,measured.output);if(charge>reservation)throw new Error('Provider usage exceeded the reserved beta allowance.');await sql.prepare('UPDATE usage SET reserved_amount=? WHERE id=? AND user_id=?').bind(charge,requestId,owner).run();}else await settle(sql,owner,requestId,reservation,cost(rate,measured.input,measured.output));
+      const measured=await invokeProvider(model,key,providerTurns,effort,false,aborter.signal,delta=>{text+=delta;emit({type:'delta',text:delta});},beta?BETA_OUTPUT:8192,{webSearch:webResearch,codeInterpreter:codeExecution,maxToolCalls:2,onTextReplace:value=>{text=value;emit({type:'replace',text:value});},onSources:sources=>emit({type:'sources',sources})});
+      if(beta){const charge=betaCost(measured.input,measured.output)+(measured.webSearchCalls||0)*10000+(measured.codeInterpreterContainers||0)*30000;if(charge>reservation)throw new Error('Provider usage exceeded the reserved beta allowance.');await sql.prepare('UPDATE usage SET reserved_amount=? WHERE id=? AND user_id=?').bind(charge,requestId,owner).run();}else await settle(sql,owner,requestId,reservation,cost(rate,measured.input,measured.output));
+      if(measured.artifacts?.length){
+       try{const artifacts=await storeWorkArtifacts(env,sql,owner,conversationId,measured.artifacts,aborter.signal);artifactIds=artifacts.map(file=>file.id);text+='\n\n생성한 파일\n'+artifacts.map(file=>`- [${file.name.replace(/[\[\]\\]/g,' ')}](${file.url})`).join('\n');}
+       catch{ text+='\n\n생성 파일을 저장하지 못했습니다. 필요한 내용을 대화에 직접 표시하도록 다시 요청해주세요.';}
+       emit({type:'replace',text});
+      }
       if(!text.trim())throw new Error('The provider returned no text.');
       const ended=Date.now(),assistantCreatedAt=Math.max(ended,userCreatedAt+1);
       await sql.batch([sql.prepare('INSERT INTO messages (id,conversation_id,role,content,model,created_at) VALUES (?,?,?,?,?,?)').bind(uid(),conversationId,'assistant',text,model.id,assistantCreatedAt),sql.prepare('UPDATE usage SET input_tokens=?,output_tokens=?,status=?,duration=? WHERE id=? AND user_id=?').bind(measured.input,measured.output,'complete',Math.max(0,ended-now),requestId,owner),sql.prepare('UPDATE conversations SET updated_at=?,model=? WHERE id=? AND user_id=?').bind(assistantCreatedAt,model.id,conversationId,owner)]);
-      emit({type:'done',usage:measured,conversationId,tool});
-     }catch(e){const error=(e instanceof Error&&e.name==='AbortError'?'The response timed out or was stopped.':e instanceof Error?e.message:'The response could not be completed.')+(beta?' The request remains counted toward the beta allowance.':' 사용량이 확정되지 않은 요청의 예약금은 정산 확인까지 보류됩니다.');await sql.prepare('UPDATE usage SET status=?,error=?,duration=? WHERE id=?').bind('error',error,Date.now()-now,requestId).run();try{emit({type:'error',error});}catch{} }
+      persisted=true;
+      emit({type:'done',usage:{input:measured.input,output:measured.output,webSearchCalls:measured.webSearchCalls,codeInterpreterContainers:measured.codeInterpreterContainers},conversationId,tool});
+     }catch(e){
+      if(persisted)return;
+      if(artifactIds.length)try{await deleteWorkArtifacts(env,sql,owner,artifactIds);}catch{console.error(JSON.stringify({event:'artifact_cleanup_failed',requestId}));}
+      const error=(e instanceof Error&&e.name==='AbortError'?'응답 시간이 초과되었거나 중지되었습니다.':e instanceof Error?e.message:'응답을 완료하지 못했습니다.')+(providerStarted?(beta?' 접수된 요청은 무료 이용 한도에 포함됩니다.':' 사용량이 확정되지 않은 요청의 예약금은 정산 확인까지 보류됩니다.'):' AI 요청을 보내지 않았습니다.');await sql.prepare('UPDATE usage SET status=?,error=?,duration=? WHERE id=?').bind('error',error,Date.now()-now,requestId).run();if(!providerStarted&&beta)await sql.prepare('UPDATE usage SET reserved_amount=0 WHERE id=? AND user_id=?').bind(requestId,owner).run();try{emit({type:'error',error});}catch{} }
      finally{clearTimeout(timer);await sql.prepare('DELETE FROM rate_limits WHERE key=?').bind(lockKey).run();try{controller.close();}catch{}}
     },cancel(){aborter.abort();}
    });
    return new Response(stream,{headers:{'Content-Type':'text/event-stream','Cache-Control':'no-cache, no-transform','X-Content-Type-Options':'nosniff'}});
-  }catch(e){if(reservation&&!providerStarted){if(beta)await sql.prepare("UPDATE usage SET status='error',error='Request preparation failed' WHERE id=? AND user_id=?").bind(requestId,owner).run();else await settle(sql,owner,requestId,reservation,0);}await sql.prepare('DELETE FROM rate_limits WHERE key=?').bind(lockKey).run();return json({error:e instanceof Error?e.message:'Request failed.',...(e instanceof WorkspaceToolError?{code:e.code}:{})},e instanceof BillingError||e instanceof WorkspaceToolError?e.status:400);}
+  }catch(e){if(reservation&&!providerStarted){if(beta)await sql.prepare("UPDATE usage SET status='error',error='Request preparation failed',reserved_amount=0 WHERE id=? AND user_id=?").bind(requestId,owner).run();else await settle(sql,owner,requestId,reservation,0);}await sql.prepare('DELETE FROM rate_limits WHERE key=?').bind(lockKey).run();return json({error:e instanceof Error?e.message:'요청을 처리하지 못했습니다.',...(e instanceof WorkspaceToolError?{code:e.code}:{})},e instanceof BillingError||e instanceof WorkspaceToolError?e.status:400);}
  }
  return json({error:'Endpoint not found.'},404);
 }
 async function dispatch(req:Request){try{
  if(req.method!=='GET'&&req.body){
-  const maxBytes=req.method==='PATCH'&&new URL(req.url).pathname==='/api/settings'?600000:200000;
+  const requestPath=new URL(req.url).pathname;
+  const maxBytes=requestPath==='/api/media/reference'?4*1024*1024+16384:req.method==='PATCH'&&requestPath==='/api/settings'?600000:200000;
   const reader=req.clone().body!.getReader();let bytes=0;
   while(true){const part=await reader.read();if(part.done)break;bytes+=part.value.byteLength;if(bytes>maxBytes){void reader.cancel();return json({error:'Request is too large.'},413);}}
  }

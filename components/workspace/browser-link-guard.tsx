@@ -33,22 +33,33 @@ function isAuthenticationLink(anchor: HTMLAnchorElement, url: URL) {
 }
 
 /** Applies the saved preference to user-activated external anchors only. */
-export function BrowserLinkGuard({ signedIn }: { signedIn: boolean }) {
+export function BrowserLinkGuard({ signedIn, remoteConfigured = false, onNavigate }: {
+  signedIn: boolean; remoteConfigured?: boolean; onNavigate?: (path: string) => void;
+}) {
   const preferences = useRef<BrowserPreferences>(defaultPreferences());
+  const preferencesReady = useRef(!signedIn);
+  const navigate = useRef(onNavigate);
+  navigate.current = onNavigate;
   const trigger = useRef<HTMLElement | null>(null);
   const cancelButton = useRef<HTMLButtonElement | null>(null);
   const closeTimer = useRef<number | null>(null);
   const [pending, setPending] = useState<PendingLink | null>(null);
+  const [preferenceState, setPreferenceState] = useState<'loading'|'ready'|'error'>(signedIn ? 'loading' : 'ready');
 
   useEffect(() => {
     const controller = new AbortController();
     let revision = 0;
     preferences.current = signedIn ? defaultPreferences() : readLocalBrowserPreferences();
+    preferencesReady.current = !signedIn;
+    setPreferenceState(signedIn ? 'loading' : 'ready');
     setPending(null);
 
     const adoptPreferences = (value: unknown) => {
       revision += 1;
       preferences.current = readPreferences(value);
+      preferencesReady.current = true;
+      setPreferenceState('ready');
+      setPending(current => current ? { ...current, remote: preferences.current.browserTarget === 'remote' } : null);
     };
     const onPreferencesChanged = (event: Event) => {
       if (event instanceof CustomEvent) adoptPreferences(event.detail);
@@ -80,13 +91,18 @@ export function BrowserLinkGuard({ signedIn }: { signedIn: boolean }) {
         || isAuthenticationLink(anchor, url)) return;
 
       const current = preferences.current;
-      if (current.browserTarget === 'current' && current.browserPermission === 'approve') return;
+      if (preferencesReady.current && current.browserTarget === 'current' && current.browserPermission === 'approve') return;
 
       event.preventDefault();
       event.stopPropagation();
       if (closeTimer.current !== null) {
         window.clearTimeout(closeTimer.current);
         closeTimer.current = null;
+      }
+      if (preferencesReady.current && current.browserTarget === 'remote' && current.browserPermission === 'approve') {
+        const destination = '/browser?url=' + encodeURIComponent(url.href);
+        if (navigate.current) navigate.current(destination); else window.location.assign(destination);
+        return;
       }
       trigger.current = anchor;
       setPending({ href: url.href, origin: url.origin, remote: current.browserTarget === 'remote' });
@@ -109,7 +125,8 @@ export function BrowserLinkGuard({ signedIn }: { signedIn: boolean }) {
         if (!controller.signal.aborted && revision === requestRevision) adoptPreferences(data);
       }).catch(() => {
         if (!controller.signal.aborted && revision === requestRevision) {
-          preferences.current = defaultPreferences();
+          preferencesReady.current = false;
+          setPreferenceState('error');
         }
       });
     }
@@ -156,10 +173,12 @@ export function BrowserLinkGuard({ signedIn }: { signedIn: boolean }) {
           }}
         >
           <Globe2 className="prism-link-guard-icon" size={26} aria-hidden="true" />
-          <Dialog.Title>{pending?.remote ? '원격 브라우저가 연결되지 않았습니다' : '외부 링크를 열까요?'}</Dialog.Title>
+          <Dialog.Title>{preferenceState === 'loading' ? '브라우저 설정 확인 중' : preferenceState === 'error' ? '브라우저 설정을 확인해 주세요' : pending?.remote ? remoteConfigured ? '원격 브라우저로 열까요?' : '원격 브라우저 연결이 필요합니다' : '외부 링크를 열까요?'}</Dialog.Title>
           <Dialog.Description>
-            {pending?.remote
-              ? '이 링크는 원격 브라우저로 열 수 없습니다. 현재 브라우저에서 직접 열 수 있습니다.'
+            {preferenceState === 'loading' ? '저장된 브라우저 설정을 불러오고 있습니다.'
+              : preferenceState === 'error' ? '저장된 설정을 확인하지 못해 링크를 열지 않았습니다. 브라우저 설정에서 다시 확인해 주세요.'
+              : pending?.remote
+              ? remoteConfigured ? '격리된 원격 브라우저에서 이 페이지를 읽고 미리보기를 저장합니다.' : '원격 브라우저만 사용하도록 설정되어 있어 현재 기기에서 링크를 열지 않았습니다.'
               : '아래 사이트를 현재 브라우저의 새 탭에서 엽니다.'}
           </Dialog.Description>
           {pending && <div className="prism-link-guard-destination" dir="ltr">
@@ -168,15 +187,22 @@ export function BrowserLinkGuard({ signedIn }: { signedIn: boolean }) {
           </div>}
           <div className="prism-setting-actions">
             <Dialog.Close asChild><button ref={cancelButton} type="button" className="prism-action-button">취소</button></Dialog.Close>
-            {pending && <a
+            {pending && preferenceState === 'ready' && <a
               className="prism-action-button primary"
-              href={pending.href}
-              target="_blank"
+              href={pending.remote ? '/browser?url=' + encodeURIComponent(pending.href) : pending.href}
+              target={pending.remote ? '_self' : '_blank'}
               rel="noopener noreferrer"
               data-prism-confirmed-link="true"
-              onClick={closeAfterNavigation}
+              onClick={event => {
+                if (pending.remote && navigate.current && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) {
+                  event.preventDefault();
+                  navigate.current('/browser?url=' + encodeURIComponent(pending.href));
+                  setPending(null);
+                } else closeAfterNavigation(event);
+              }}
               onAuxClick={closeAfterNavigation}
-            >{pending.remote ? '현재 브라우저로 열기' : '링크 열기'}<ExternalLink size={15} aria-hidden="true" /></a>}
+            >{pending.remote ? remoteConfigured ? '원격으로 열기' : '연결 상태 보기' : '링크 열기'}<ExternalLink size={15} aria-hidden="true" /></a>}
+            {preferenceState === 'error' && <a className="prism-action-button primary" href="/browser-settings">브라우저 설정</a>}
           </div>
         </Dialog.Content>
       </Dialog.Portal>

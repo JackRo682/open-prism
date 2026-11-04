@@ -11,8 +11,8 @@
 .gemini-shell .gemini-composer[data-expanded='true'] textarea.gemini-prompt {
   grid-column: 1 / -1;
   grid-row: 1;
-  min-height: 40px;
-  padding: 8px 12px;
+  min-height: 24px;
+  padding: 0 12px;
 }
 .gemini-shell .gemini-composer[data-expanded='true'] .gemini-add {
   grid-column: 1;
@@ -160,8 +160,8 @@
 .prism-tool-chevron, .prism-tool-check { margin-left: auto; flex-shrink: 0; }
 .prism-tool-availability { margin-left: auto; font-size: 10px; color: var(--prism-muted); }
 .prism-tool-menu.prism-composer-more-menu {
-  min-width: 158px;
-  width: 158px;
+  min-width: 208px;
+  width: 208px;
   padding: 4px;
   border: 0;
   border-radius: 16px;
@@ -205,6 +205,8 @@
 .prism-source-row small { display: block; margin-top: 4px; color: var(--prism-muted); font-size: 12px; line-height: 18px; }
 .prism-source-row input { width: 17px; height: 17px; margin: 0; accent-color: var(--prism-accent); }
 .prism-source-row:has(input:disabled) { opacity: .7; }
+.prism-source-drive { width: 100%; border: 0; border-radius: 12px; background: transparent; text-align: start; font-family: inherit; }
+.prism-source-drive:hover { background: var(--prism-hover); }
 .prism-source-note { margin: 4px 8px 8px; color: var(--prism-muted); font-size: 12px; line-height: 20px; }
 .prism-tool-menu.prism-aspect-menu { min-width: 180px; width: 180px; border: 0; }
 .prism-composer-menu, .prism-composer-more-menu, .prism-composer-upload-menu,
@@ -277,6 +279,26 @@
 .prism-image-notice-confirm:hover { background: #5056b8; }
 .prism-image-notice button:focus-visible { outline: 2px solid var(--prism-accent); outline-offset: 3px; }
 
+.gemini-media-reference {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: fit-content;
+  max-width: 100%;
+  margin: 0 12px 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--prism-border);
+  border-radius: 16px;
+  background: var(--prism-surface);
+  color: var(--prism-ink);
+}
+.gemini-media-reference > img { width: 48px; height: 48px; flex-shrink: 0; object-fit: cover; border-radius: 8px; }
+.gemini-media-reference > span { min-width: 0; }
+.gemini-media-reference strong { display: block; font-size: 12px; font-weight: 500; }
+.gemini-media-reference > span > span { display: block; overflow: hidden; color: var(--prism-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.gemini-media-reference > button { display: grid; place-items: center; flex-shrink: 0; width: 36px; height: 36px; border-radius: 50%; }
+.gemini-media-reference > button:hover { background: var(--prism-hover); }
+
 @keyframes prism-composer-menu-in {
   from { opacity: 0; transform: translateY(4px) scale(.98); }
   to { opacity: 1; transform: translateY(0) scale(1); }
@@ -288,24 +310,45 @@
 }
 @media (max-width: 767px) {
   .gemini-shell .gemini-composer[data-expanded='true'] {
-    grid-template-columns: 32px minmax(0, 1fr) auto;
+    grid-template-columns: 44px minmax(0, 1fr) auto;
+    grid-template-rows: minmax(40px, auto) 44px;
     column-gap: 4px;
-    padding: 10px 8px;
+    row-gap: 4px;
+    padding: 8px;
     border-radius: 28px;
   }
-  .gemini-shell .gemini-composer[data-expanded='true'] textarea.gemini-prompt { padding-inline: 12px; }
-  .gemini-shell .gemini-tool-chip { gap: 6px; padding: 0 10px; font-size: 13px; }
+  .gemini-shell .gemini-composer textarea.gemini-prompt { max-height: clamp(24px, calc(var(--prism-viewport-height, 100dvh) - 280px), 144px); }
+  .gemini-shell .gemini-composer[data-expanded='true'] textarea.gemini-prompt { padding: 0 12px; min-height: 24px; }
+  .gemini-shell .gemini-tool-chip { gap: 6px; padding: 0 10px; min-height: 44px; font-size: 13px; }
   .gemini-shell .gemini-tool-chip-symbol { flex-basis: 17px; width: 17px; }
   .gemini-shell .gemini-tool-chip-symbol > svg { width: 17px; height: 17px; }
   .gemini-shell .gemini-media-model { gap: 4px; padding-inline: 6px; font-size: 12px; }
   .gemini-shell .gemini-tool-options { gap: 8px; margin-top: 10px; }
-  .gemini-shell .gemini-option-button { min-height: 36px; font-size: 13px; }
+  .gemini-shell .gemini-option-button { min-height: 44px; font-size: 13px; }
   .gemini-shell .gemini-capability-note { margin-inline: 8px; }
-  .prism-image-notice { padding: 24px; }
+  .gemini-shell .gemini-capability-note > button { min-height: 44px; padding-inline: 4px; }
+  .gemini-media-reference > button { width: 44px; height: 44px; }
+  .gemini-shell .gemini-composer:is([data-tool='research'], [data-tool='video']) { grid-template-rows: minmax(40px, auto) 44px auto; }
+  .prism-composer-menu .prism-tool-item,
+  .prism-composer-more-menu .prism-tool-item,
+  .prism-composer-upload-menu .prism-tool-item,
+  .prism-aspect-menu .prism-tool-item { min-height: 44px; padding: 10px 12px; font-size: 14px; }
+  .prism-tool-menu.prism-composer-menu { width: min(288px, calc(100vw - 24px)); }
+  .prism-tool-availability { font-size: 11px; flex-shrink: 0; }
+  .prism-image-notice { padding: 24px; top: calc(var(--prism-viewport-height, 100dvh) / 2); max-height: calc(var(--prism-viewport-height, 100dvh) - 24px); }
+  .prism-image-notice-actions > button { min-height: 44px; }
 }
 @media (max-width: 420px) {
-  .gemini-shell .gemini-composer[data-tool='research'] .gemini-model-trigger { max-width: 86px; }
-  .gemini-shell .gemini-composer[data-expanded='true'] .gemini-tool-chip { max-width: min(100%, 148px); }
+  /* A separate action row keeps the selected tool readable with 44px targets. */
+  .gemini-shell .gemini-composer[data-expanded='true']:not([data-tool='chat']) {
+    grid-template-columns: 44px minmax(0, 1fr);
+    grid-template-rows: minmax(40px, auto) 44px 44px;
+  }
+  .gemini-shell .gemini-composer[data-expanded='true']:not([data-tool='chat']) .gemini-composer-actions { grid-column: 1 / -1; grid-row: 3; justify-content: flex-end; }
+  .gemini-shell .gemini-composer[data-expanded='true']:not([data-tool='chat']) .gemini-composer-actions > .gemini-model-trigger { margin-right: auto; max-width: min(180px, calc(100% - 96px)); }
+  .gemini-shell .gemini-composer:is([data-tool='research'], [data-tool='video']) { grid-template-rows: minmax(40px, auto) 44px 44px auto; }
+  .gemini-shell .gemini-composer:is([data-tool='research'], [data-tool='video']) .gemini-tool-options { grid-row: 4; margin-top: 4px; }
+  .gemini-shell .gemini-composer[data-expanded='true'] .gemini-tool-chip { max-width: 100%; }
 }
 @media (prefers-reduced-motion: reduce) {
   .prism-composer-menu, .prism-composer-more-menu, .prism-composer-upload-menu,

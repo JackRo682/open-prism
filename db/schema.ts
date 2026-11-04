@@ -1,4 +1,5 @@
-import { integer, sqliteTable, text, index } from 'drizzle-orm/sqlite-core';
+import { sql } from 'drizzle-orm';
+import { integer, sqliteTable, text, index, check, primaryKey } from 'drizzle-orm/sqlite-core';
 export const conversations = sqliteTable('conversations', {
  id: text('id').primaryKey(), userId: text('user_id').notNull(), title: text('title').notNull(), model: text('model').notNull(),
  createdAt: integer('created_at').notNull(), updatedAt: integer('updated_at').notNull(),
@@ -42,3 +43,48 @@ export const publicShares = sqliteTable('public_shares', {
  conversationId: text('conversation_id').notNull().references(() => conversations.id, { onDelete: 'cascade' }),
  token: text('token').notNull().unique(), title: text('title').notNull(), snapshot: text('snapshot').notNull(), createdAt: integer('created_at').notNull(),
 }, t => [index('public_shares_owner').on(t.userId, t.createdAt)]);
+
+export const scheduledTasks = sqliteTable('scheduled_tasks', {
+ id: text('id').primaryKey().notNull(), userId: text('user_id').notNull(),
+ title: text('title').notNull(), prompt: text('prompt').notNull(), model: text('model').notNull(),
+ timezone: text('timezone').notNull(), recurrence: text('recurrence').notNull(),
+ scheduledAt: integer('scheduled_at').notNull(), nextRun: integer('next_run'), lastRun: integer('last_run'),
+ lastError: text('last_error'), lastConversationId: text('last_conversation_id'),
+ enabled: integer('enabled').notNull().default(0), status: text('status').notNull().default('draft'),
+ runToken: text('run_token'), lockedUntil: integer('locked_until'),
+ createdAt: integer('created_at').notNull(), updatedAt: integer('updated_at').notNull(),
+}, t => [
+ index('scheduled_tasks_owner').on(t.userId, t.createdAt),
+ index('scheduled_tasks_due').on(t.enabled, t.nextRun),
+ check('scheduled_tasks_recurrence_check', sql`${t.recurrence} IN ('once','daily','weekly')`),
+ check('scheduled_tasks_enabled_check', sql`${t.enabled} IN (0,1)`),
+ check('scheduled_tasks_status_check', sql`${t.status} IN ('draft','active','paused','running','completed','error')`),
+]);
+
+// Migration 0005 uses TEXT PRIMARY KEY without an explicit NOT NULL. Table-level
+// keys preserve that SQLite nullability; the API always supplies generated IDs.
+export const mediaAssets = sqliteTable('media_assets', {
+ id: text('id'), userId: text('user_id').notNull(), kind: text('kind').notNull(),
+ prompt: text('prompt').notNull().default(''), model: text('model').notNull().default(''),
+ status: text('status').notNull(), objectKey: text('object_key'), mimeType: text('mime_type'),
+ size: integer('size').notNull().default(0), job: text('job'), usageId: text('usage_id'), error: text('error'),
+ createdAt: integer('created_at').notNull(), updatedAt: integer('updated_at').notNull(),
+}, t => [
+ primaryKey({ columns: [t.id] }), index('media_owner').on(t.userId, t.createdAt),
+ check('media_assets_kind_check', sql`${t.kind} IN ('image','video','music','reference')`),
+ check('media_assets_status_check', sql`${t.status} IN ('processing','complete','error')`),
+]);
+
+export const browserSessions = sqliteTable('browser_sessions', {
+ id: text('id'), userId: text('user_id').notNull(), url: text('url').notNull(),
+ title: text('title').notNull(), content: text('content').notNull(), createdAt: integer('created_at').notNull(),
+}, t => [primaryKey({ columns: [t.id] }), index('browser_sessions_owner').on(t.userId, t.createdAt)]);
+
+export const workArtifacts = sqliteTable('work_artifacts', {
+ id: text('id'), userId: text('user_id').notNull(), conversationId: text('conversation_id').notNull(),
+ name: text('name').notNull(), objectKey: text('object_key').notNull(), mimeType: text('mime_type').notNull(),
+ size: integer('size').notNull(), createdAt: integer('created_at').notNull(),
+}, t => [
+ primaryKey({ columns: [t.id] }), index('work_artifacts_owner').on(t.userId, t.createdAt),
+ index('work_artifacts_conversation').on(t.conversationId),
+]);

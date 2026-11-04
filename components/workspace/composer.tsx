@@ -10,11 +10,16 @@ import {
   SlidersHorizontal, Square, Upload, Video, X, type LucideIcon,
 } from 'lucide-react';
 import type { Model, Provider } from '../../lib/models';
+import { useIsMobile } from '../../hooks/use-mobile';
 
 export type ComposerTool = 'chat' | 'canvas' | 'research' | 'learning' | 'image' | 'video';
 export type ComposerResearchSources = { web: boolean };
-export type ComposerCapabilities = { webResearch: boolean; image: boolean; video: boolean };
+export type ComposerCapabilities = {
+  webResearch: boolean; image: boolean; video: boolean;
+  drive?: boolean; music?: boolean;
+};
 export type VideoAspect = '16:9' | '9:16';
+export type MediaReference = { name: string; url?: string };
 
 type FileItem = { id: string; name: string };
 type Recognition = {
@@ -52,6 +57,10 @@ export type ComposerProps = {
   capabilities?: ComposerCapabilities;
   videoAspect?: VideoAspect; onVideoAspect?(aspect: VideoAspect): void;
   onMediaUpload?(): void;
+  mediaReference?: MediaReference | null;
+  onRemoveMediaReference?(): void;
+  onDriveUpload?(): void;
+  onMusic?(): void;
   mediaModelLabel?: string;
   showCapabilityNotice?: boolean;
   busy: boolean; ready: boolean; uploading: boolean;
@@ -85,6 +94,7 @@ function SavedFileItems({ files, attached, onAttach, onDetach, onSelect }: {
 }
 
 export function Composer(props: ComposerProps) {
+  const isMobile = useIsMobile();
   const [modelOpen, setModelOpen] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
   const [moreToolsOpen, setMoreToolsOpen] = useState(false);
@@ -93,7 +103,6 @@ export function Composer(props: ComposerProps) {
   const [localSources, setLocalSources] = useState<ComposerResearchSources>({ web: false });
   const [localAspect, setLocalAspect] = useState<VideoAspect>('16:9');
   const [imageNoticeOpen, setImageNoticeOpen] = useState(false);
-  const [imageAcknowledged, setImageAcknowledged] = useState(false);
   const imageAcknowledgedRef = useRef(false);
   const imageCancelRef = useRef<HTMLButtonElement>(null);
   const focusAfterMenu = useRef<'trigger' | 'composer' | 'dialog'>('trigger');
@@ -109,7 +118,6 @@ export function Composer(props: ComposerProps) {
   const capabilityNoticeId = useId();
   const webSourceNoticeId = useId();
   const mention = /(?:^|\s)@([^\s@]*)$/.exec(props.prompt);
-  const mentionOpen = !!mention;
   const { inputRef, prompt } = props;
   const tool = props.compare ? 'chat' : props.tool ?? localTool;
   const capabilities = props.capabilities ?? noCapabilities;
@@ -118,8 +126,9 @@ export function Composer(props: ComposerProps) {
   const details = tool === 'chat' ? null : toolDetails[tool];
   const ToolIcon = details?.icon;
   const isMedia = tool === 'image' || tool === 'video';
+  const mentionOpen = !!mention && !isMedia;
   const mediaUnavailable = tool === 'image' ? !capabilities.image : tool === 'video' ? !capabilities.video : false;
-  const capabilityNotice = mediaUnavailable ? `${tool === 'image' ? '이미지' : '동영상'} 생성 서비스가 아직 연결되지 않았습니다.` : '';
+  const capabilityNotice = mediaUnavailable ? tool === 'video' ? '동영상 생성에는 Google API 연결과 운영자가 승인한 동영상 이용 한도가 필요합니다.' : '이미지 생성 서비스 연결과 이용 설정을 확인해 주세요.' : '';
   const showCapabilityNotice = !!capabilityNotice && props.showCapabilityNotice !== false;
   const expanded = tool !== 'chat' || prompt.includes('\n') || prompt.length > 100;
   const placeholder = props.compare ? '여러 모델에 같은 질문을 입력하세요'
@@ -130,7 +139,26 @@ export function Composer(props: ComposerProps) {
     if (!input) return;
     input.style.height = '24px';
     input.style.height = `${Math.min(144, input.scrollHeight)}px`;
-  }, [prompt, tool, inputRef]);
+  }, [prompt, tool, props.mode, inputRef]);
+  useEffect(() => {
+    const input = inputRef.current;
+    if (!input) return;
+    let width = input.clientWidth;
+    const resize = () => {
+      if (input.clientWidth === width) return;
+      width = input.clientWidth;
+      input.style.height = '24px';
+      input.style.height = `${Math.min(144, input.scrollHeight)}px`;
+    };
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', resize);
+      return () => window.removeEventListener('resize', resize);
+    }
+    const observer = new ResizeObserver(resize);
+    observer.observe(input);
+    return () => observer.disconnect();
+  }, [inputRef]);
+  useEffect(() => { setModelOpen(false); setSourcesOpen(false); }, [props.mode, tool]);
   useEffect(() => () => recognition.current?.abort(), []);
   useEffect(() => {
     if (!props.busy) return;
@@ -143,9 +171,8 @@ export function Composer(props: ComposerProps) {
     let acknowledged = false;
     try { acknowledged = localStorage.getItem(imageNoticeKey) === 'acknowledged'; } catch { /* Acknowledgement still works for this session. */ }
     imageAcknowledgedRef.current ||= acknowledged;
-    setImageAcknowledged(imageAcknowledgedRef.current);
-    if (tool === 'image' && !imageAcknowledgedRef.current) setImageNoticeOpen(true);
-  }, [tool]);
+    if (props.ready && capabilities.image && tool === 'image' && !imageAcknowledgedRef.current) setImageNoticeOpen(true);
+  }, [tool, props.ready, capabilities.image]);
   useEffect(() => {
     if (!mentionOpen || !props.signedIn) return;
     const controller = new AbortController();
@@ -169,11 +196,12 @@ export function Composer(props: ComposerProps) {
     setSourcesOpen(false);
     if (props.tool === undefined) setLocalTool(next);
     props.onTool?.(next);
+    if (next === 'research' && tool !== 'research' && capabilities.webResearch) updateSources(true);
     inputRef.current?.focus();
   }
 
   function chooseTool(next: ComposerTool) {
-    if (next === 'image' && !imageAcknowledgedRef.current) {
+    if (next === 'image' && capabilities.image && !imageAcknowledgedRef.current) {
       focusAfterMenu.current = 'dialog';
       setMoreToolsOpen(false);
       setToolsOpen(false);
@@ -196,6 +224,7 @@ export function Composer(props: ComposerProps) {
   }
 
   function send() {
+    if (props.busy || !props.ready || props.uploading || !prompt.trim()) return;
     if (mediaUnavailable) { props.onError(capabilityNotice); return; }
     if (tool === 'image' && !imageAcknowledgedRef.current) { setImageNoticeOpen(true); return; }
     props.onSend();
@@ -227,10 +256,21 @@ export function Composer(props: ComposerProps) {
 
   const filtered = props.models.filter(model => `${model.name} ${model.provider}`.toLowerCase().includes(query.toLowerCase()));
   const fileItems = <SavedFileItems files={props.files} attached={props.attached} onAttach={props.onAttach} onDetach={props.onDetach} onSelect={() => { focusAfterMenu.current = 'composer'; }} />;
+  const additionalTools = <>
+    <DropdownMenu.Item className="prism-tool-item" onSelect={props.onMusic} disabled={!props.onMusic || props.busy} title={capabilities.music ? '음악 생성 작업 공간을 엽니다.' : '음악 생성 연결 상태를 확인합니다.'}><Music2 size={17} aria-hidden="true" /><span>음악 만들기</span>{!capabilities.music && <span className="prism-tool-availability">연결 필요</span>}</DropdownMenu.Item>
+    <DropdownMenu.Item className="prism-tool-item" onSelect={() => chooseTool('canvas')}><PanelsTopLeft size={17} aria-hidden="true" /><span>Canvas</span></DropdownMenu.Item>
+    <DropdownMenu.Item className="prism-tool-item" onSelect={() => chooseTool('research')}><Atom size={17} aria-hidden="true" /><span>Deep Research</span></DropdownMenu.Item>
+    <DropdownMenu.Item className="prism-tool-item" onSelect={() => chooseTool('learning')}><BookOpen size={17} aria-hidden="true" /><span>가이드 학습</span></DropdownMenu.Item>
+  </>;
 
   return <div className="gemini-compose-wrap" data-composer-tool={tool}>
-    {props.selectedSkill && <div className="gemini-attachments"><span><ScrollText size={14} aria-hidden="true" /><span>{props.selectedSkill.name}</span><button type="button" disabled={props.busy} aria-label="스킬 적용 해제" onClick={() => props.onSkill(null)}><X size={14} aria-hidden="true" /></button></span></div>}
-    {props.attached.length > 0 && <div className="gemini-attachments" aria-label="첨부 파일">
+    {isMedia && props.mediaReference && <div className="gemini-media-reference" aria-label="참조 이미지">
+      {props.mediaReference.url ? <img src={props.mediaReference.url} alt="첨부한 참조 이미지" /> : <ImagePlus size={24} aria-hidden="true" />}
+      <span><strong>참조 이미지</strong><span>{props.mediaReference.name}</span></span>
+      {props.onRemoveMediaReference && <button type="button" aria-label="참조 이미지 제거" disabled={props.busy || props.uploading} onClick={props.onRemoveMediaReference}><X size={18} aria-hidden="true" /></button>}
+    </div>}
+    {!isMedia && props.selectedSkill && <div className="gemini-attachments"><span><ScrollText size={14} aria-hidden="true" /><span>{props.selectedSkill.name}</span><button type="button" disabled={props.busy} aria-label="스킬 적용 해제" onClick={() => props.onSkill(null)}><X size={14} aria-hidden="true" /></button></span></div>}
+    {!isMedia && props.attached.length > 0 && <div className="gemini-attachments" aria-label="첨부 파일">
       {props.attached.map(id => <span key={id}><FileText size={14} aria-hidden="true" /><span>{props.files.find(file => file.id === id)?.name || '첨부 문서'}</span><button type="button" disabled={props.busy} aria-label={`${props.files.find(file => file.id === id)?.name || '첨부 문서'} 첨부 제거`} onClick={() => props.onDetach(id)}><X size={14} aria-hidden="true" /></button></span>)}
     </div>}
     <div className="gemini-composer" data-tool={tool} data-expanded={expanded} data-multiline={prompt.includes('\n') || prompt.length > 100}>
@@ -248,34 +288,31 @@ export function Composer(props: ComposerProps) {
           }}
         >
           <DropdownMenu.Item className="prism-tool-item" onSelect={isMedia ? props.onMediaUpload : props.onUpload} disabled={isMedia && !props.onMediaUpload}><Paperclip size={18} aria-hidden="true" /><span>파일 업로드</span></DropdownMenu.Item>
-          <DropdownMenu.Item className="prism-tool-item" disabled title="Google Drive 연결이 필요합니다."><Cloud size={18} aria-hidden="true" /><span>Drive에서 파일 추가</span><span className="prism-tool-availability">미연결</span></DropdownMenu.Item>
-          <DropdownMenu.Sub>
+          {!isMedia && <DropdownMenu.Item className="prism-tool-item" onSelect={props.onDriveUpload} disabled={!props.onDriveUpload || props.busy || props.uploading} title={capabilities.drive ? 'Google Drive에서 문서를 선택합니다.' : 'Google Drive 연결 설정을 엽니다.'}><Cloud size={18} aria-hidden="true" /><span>Drive에서 파일 추가</span>{!capabilities.drive && <span className="prism-tool-availability">연결</span>}</DropdownMenu.Item>}
+          {isMobile ? <DropdownMenu.Item className="prism-tool-item" onSelect={() => props.onNavigate('/files')}><FolderOpen size={18} aria-hidden="true" /><span>내 파일 열기</span></DropdownMenu.Item> : <DropdownMenu.Sub>
             <DropdownMenu.SubTrigger className="prism-tool-item"><MoreHorizontal size={18} aria-hidden="true" /><span>업로드 더보기</span><ChevronRight className="prism-tool-chevron" size={16} aria-hidden="true" /></DropdownMenu.SubTrigger>
             <DropdownMenu.Portal><DropdownMenu.SubContent className="prism-tool-menu prism-composer-upload-menu" sideOffset={4} collisionPadding={12} loop>
               <DropdownMenu.Item className="prism-tool-item" onSelect={() => props.onNavigate('/files')}><FolderOpen size={18} aria-hidden="true" /><span>내 파일 열기</span></DropdownMenu.Item>
               {!isMedia && <><DropdownMenu.Separator className="prism-menu-divider" />{fileItems}</>}
             </DropdownMenu.SubContent></DropdownMenu.Portal>
-          </DropdownMenu.Sub>
+          </DropdownMenu.Sub>}
           {!props.compare && <>
             <DropdownMenu.Separator className="prism-menu-divider" />
             <DropdownMenu.Item className="prism-tool-item" onSelect={() => chooseTool('image')}><Image size={18} aria-hidden="true" /><span>이미지 만들기</span></DropdownMenu.Item>
             <DropdownMenu.Item className="prism-tool-item" onSelect={() => chooseTool('video')}><Video size={18} aria-hidden="true" /><span>동영상 만들기</span></DropdownMenu.Item>
-            <DropdownMenu.Sub open={moreToolsOpen} onOpenChange={setMoreToolsOpen}>
+            {isMobile ? <><DropdownMenu.Separator className="prism-menu-divider" />{additionalTools}</> : <DropdownMenu.Sub open={moreToolsOpen} onOpenChange={setMoreToolsOpen}>
               <DropdownMenu.SubTrigger className="prism-tool-item"><MoreHorizontal size={18} aria-hidden="true" /><span>도구 더보기</span><ChevronRight className="prism-tool-chevron" size={16} aria-hidden="true" /></DropdownMenu.SubTrigger>
               <DropdownMenu.Portal><DropdownMenu.SubContent className="prism-tool-menu prism-composer-more-menu" sideOffset={0} alignOffset={-124} collisionPadding={8} loop>
-                <DropdownMenu.Item className="prism-tool-item" disabled title="음악 생성은 현재 지원하지 않습니다."><Music2 size={15} aria-hidden="true" /><span>음악 만들기</span></DropdownMenu.Item>
-                <DropdownMenu.Item className="prism-tool-item" onSelect={() => chooseTool('canvas')}><PanelsTopLeft size={15} aria-hidden="true" /><span>Canvas</span></DropdownMenu.Item>
-                <DropdownMenu.Item className="prism-tool-item" onSelect={() => chooseTool('research')}><Atom size={15} aria-hidden="true" /><span>Deep Research</span></DropdownMenu.Item>
-                <DropdownMenu.Item className="prism-tool-item" onSelect={() => chooseTool('learning')}><BookOpen size={15} aria-hidden="true" /><span>가이드 학습</span></DropdownMenu.Item>
+                {additionalTools}
               </DropdownMenu.SubContent></DropdownMenu.Portal>
-            </DropdownMenu.Sub>
+            </DropdownMenu.Sub>}
           </>}
         </DropdownMenu.Content></DropdownMenu.Portal>
       </DropdownMenu.Root>
       <textarea
         ref={inputRef} className="gemini-prompt" aria-label="메시지 입력"
         aria-describedby={showCapabilityNotice ? capabilityNoticeId : undefined}
-        value={prompt} rows={1} maxLength={32000} disabled={props.busy} placeholder={placeholder}
+        value={prompt} rows={1} maxLength={32000} disabled={props.busy} placeholder={placeholder} enterKeyHint="send"
         onChange={event => props.onPrompt(event.target.value)}
         onKeyDown={event => {
           if (mentionOpen && event.key === 'ArrowDown') { event.preventDefault(); mentionRef.current?.querySelector<HTMLButtonElement>('button')?.focus(); return; }
@@ -292,7 +329,7 @@ export function Composer(props: ComposerProps) {
         <span>{details.label}</span>
       </button>}
       <div className="gemini-composer-actions">
-        {!props.compare && !isMedia && tool !== 'learning' && <Popover.Root open={modelOpen} onOpenChange={open => { setModelOpen(open); if (!open) setQuery(''); }}>
+        {!props.compare && props.mode !== 'work' && !isMedia && tool !== 'learning' && <Popover.Root open={modelOpen} onOpenChange={open => { setModelOpen(open); if (!open) setQuery(''); }}>
           <Popover.Trigger asChild><button type="button" className="gemini-model-trigger" disabled={props.busy} aria-label={`모델 선택: ${props.selected.name}`}><span>{props.selected.name}</span><ChevronDown size={18} aria-hidden="true" /></button></Popover.Trigger>
           <Popover.Portal><Popover.Content className="prism-model-menu" side="bottom" align="end" sideOffset={14} collisionPadding={12}>
             <div className="prism-model-menu-heading"><strong>모델 선택</strong><Popover.Close className="prism-icon" aria-label="모델 선택 닫기"><X size={18} aria-hidden="true" /></Popover.Close></div>
@@ -306,7 +343,7 @@ export function Composer(props: ComposerProps) {
           </Popover.Content></Popover.Portal>
         </Popover.Root>}
         {isMedia && <Popover.Root>
-          <Popover.Trigger asChild><button type="button" className="gemini-model-trigger gemini-media-model" disabled={props.busy} aria-label={`${tool === 'image' ? '이미지' : '동영상'} 모델 연결 상태`}><span>{mediaUnavailable ? '연결 필요' : props.mediaModelLabel || `${tool === 'image' ? '이미지' : '동영상'} 모델`}</span><ChevronDown size={16} aria-hidden="true" /></button></Popover.Trigger>
+          <Popover.Trigger asChild><button type="button" className="gemini-model-trigger gemini-media-model" disabled={props.busy} aria-label={`${tool === 'image' ? '이미지' : '동영상'} 모델 연결 상태`}><span>{mediaUnavailable ? '설정 필요' : props.mediaModelLabel || `${tool === 'image' ? '이미지' : '동영상'} 모델`}</span><ChevronDown size={16} aria-hidden="true" /></button></Popover.Trigger>
           <Popover.Portal><Popover.Content className="prism-tool-menu prism-source-popover" side="bottom" align="end" sideOffset={10} collisionPadding={12}>
             <div className="prism-source-heading"><strong>{tool === 'image' ? '이미지' : '동영상'} 생성</strong><Popover.Close className="prism-icon" aria-label="모델 연결 상태 닫기"><X size={18} aria-hidden="true" /></Popover.Close></div>
             <p className="prism-source-note">{mediaUnavailable ? capabilityNotice : `현재 생성 모델: ${props.mediaModelLabel || (tool === 'image' ? '연결된 이미지 모델' : '연결된 동영상 모델')}`}</p>
@@ -315,7 +352,7 @@ export function Composer(props: ComposerProps) {
         </Popover.Root>}
         {props.compare && <label className="prism-compare-effort"><SlidersHorizontal size={16} aria-hidden="true" /><select aria-label="비교 추론 수준" disabled={props.busy} value={props.effort} onChange={event => props.onEffort(event.target.value)}>{['low', 'medium', 'high'].map(value => <option key={value} value={value}>{value}</option>)}</select></label>}
         <button type="button" className={'gemini-mic' + (listening ? ' is-listening' : '')} aria-label={listening ? '음성 입력 중지' : '음성 입력'} title="브라우저 음성 인식 · 마이크 사용 시에만 시작" aria-pressed={listening} disabled={props.busy} onClick={dictate}><Mic size={22} aria-hidden="true" /></button>
-        {props.busy ? <button type="button" className="gemini-send" aria-label="응답 중지" onClick={props.onStop}><Square size={16} fill="currentColor" aria-hidden="true" /></button> : prompt.trim() ? <button type="button" className="gemini-send" aria-label="메시지 보내기" title={mediaUnavailable ? capabilityNotice : undefined} disabled={!props.ready || props.uploading || mediaUnavailable || (tool === 'image' && !imageAcknowledged)} onClick={send}><ArrowUp size={21} aria-hidden="true" /></button> : null}
+        {props.busy ? <button type="button" className="gemini-send" aria-label="응답 중지" onClick={props.onStop}><Square size={16} fill="currentColor" aria-hidden="true" /></button> : prompt.trim() ? <button type="button" className="gemini-send" aria-label="메시지 보내기" title={mediaUnavailable ? capabilityNotice : undefined} disabled={!props.ready || props.uploading || mediaUnavailable} onClick={send}><ArrowUp size={21} aria-hidden="true" /></button> : null}
       </div>
       {tool === 'research' && <div className="gemini-tool-options">
         <Popover.Root open={sourcesOpen} onOpenChange={setSourcesOpen}>
@@ -323,6 +360,7 @@ export function Composer(props: ComposerProps) {
           <Popover.Portal><Popover.Content className="prism-tool-menu prism-source-popover" side="bottom" align="start" sideOffset={10} collisionPadding={12}>
             <div className="prism-source-heading"><strong>조사 소스</strong><Popover.Close className="prism-icon" aria-label="소스 설정 닫기"><X size={18} aria-hidden="true" /></Popover.Close></div>
             <label className="prism-source-row"><Globe2 size={19} aria-hidden="true" /><span><strong>웹 검색</strong><small id={webSourceNoticeId}>{capabilities.webResearch ? '웹에서 출처를 검색합니다.' : '현재 연결되지 않았습니다.'}</small></span><input type="checkbox" aria-label="웹 검색 사용" aria-describedby={webSourceNoticeId} checked={capabilities.webResearch && sources.web} disabled={!capabilities.webResearch || props.busy} onChange={event => updateSources(event.target.checked)} /></label>
+            {props.onDriveUpload && <button type="button" className="prism-source-row prism-source-drive" disabled={props.busy || props.uploading} onClick={() => { setSourcesOpen(false); props.onDriveUpload?.(); }}><Cloud size={19} aria-hidden="true" /><span><strong>Google Drive</strong><small>{capabilities.drive ? 'Drive 문서를 조사에 추가합니다.' : '계정을 연결하고 조사할 문서를 선택하세요.'}</small></span><ChevronRight size={18} aria-hidden="true" /></button>}
             <div className="prism-source-row"><FileText size={19} aria-hidden="true" /><span><strong>첨부 파일</strong><small>{props.attached.length ? `${props.attached.length}개의 파일을 조사에 사용합니다.` : '파일 버튼으로 조사할 문서를 첨부하세요.'}</small></span>{props.attached.length > 0 && <Check size={18} aria-hidden="true" />}</div>
             <p className="prism-source-note">{capabilities.webResearch ? '선택한 소스와 첨부 파일을 바탕으로 조사합니다.' : '현재는 첨부 문서 분석을 지원합니다. 웹 검색과 백그라운드 조사는 제공하지 않습니다.'}</p>
           </Popover.Content></Popover.Portal>
@@ -336,7 +374,7 @@ export function Composer(props: ComposerProps) {
         </DropdownMenu.Root>
       </div>}
       {tool === 'video' && <div className="gemini-tool-options">
-        <button type="button" className="gemini-option-button" aria-label="참조 이미지 추가" disabled={props.busy || props.uploading || !capabilities.video || !props.onMediaUpload} title={!capabilities.video || !props.onMediaUpload ? '동영상과 이미지 업로드 서비스 연결이 필요합니다.' : '참조 이미지 추가'} onClick={props.onMediaUpload}><ImagePlus size={18} aria-hidden="true" /></button>
+        <button type="button" className="gemini-option-button" aria-label="참조 이미지 추가" disabled={props.busy || props.uploading || !capabilities.video || !props.onMediaUpload} title={!capabilities.video || !props.onMediaUpload ? '동영상 서비스 연결과 승인된 동영상 이용 한도가 필요합니다.' : '참조 이미지 추가'} onClick={props.onMediaUpload}><ImagePlus size={18} aria-hidden="true" /></button>
         <DropdownMenu.Root>
           <DropdownMenu.Trigger asChild><button type="button" className="gemini-option-button" aria-label={`동영상 비율: ${videoAspect === '16:9' ? '가로' : '세로'}`} disabled={props.busy}>{videoAspect === '16:9' ? <RectangleHorizontal size={16} aria-hidden="true" /> : <RectangleVertical size={16} aria-hidden="true" />}<span>{videoAspect === '16:9' ? '가로' : '세로'}</span><ChevronDown size={15} aria-hidden="true" /></button></DropdownMenu.Trigger>
           <DropdownMenu.Portal><DropdownMenu.Content className="prism-tool-menu prism-aspect-menu" side="bottom" align="end" sideOffset={10} collisionPadding={12} loop><DropdownMenu.RadioGroup value={videoAspect} onValueChange={updateAspect} aria-label="동영상 비율">
@@ -356,10 +394,7 @@ export function Composer(props: ComposerProps) {
       <button type="button" className="prism-tool-item" onClick={() => props.onNavigate('/settings')}><PlugZap size={18} aria-hidden="true" />AI 연결 설정</button>
     </div>}
     {listening && <p className="prism-listening" role="status">듣고 있습니다… 음성 인식은 브라우저의 음성 서비스를 사용할 수 있습니다.</p>}
-    <Dialog.Root open={imageNoticeOpen} onOpenChange={open => {
-      setImageNoticeOpen(open);
-      if (!open && !imageAcknowledgedRef.current && tool === 'image') applyTool('chat');
-    }}>
+    <Dialog.Root open={imageNoticeOpen} onOpenChange={setImageNoticeOpen}>
       <Dialog.Portal>
         <Dialog.Overlay className="prism-image-notice-overlay" />
         <Dialog.Content
@@ -373,10 +408,10 @@ export function Composer(props: ComposerProps) {
             <Dialog.Close ref={imageCancelRef} className="prism-image-notice-cancel">취소</Dialog.Close>
             <button type="button" className="prism-image-notice-confirm" onClick={() => {
               imageAcknowledgedRef.current = true;
-              setImageAcknowledged(true);
               try { localStorage.setItem(imageNoticeKey, 'acknowledged'); } catch { /* Keep the acknowledgement in memory when storage is unavailable. */ }
               setImageNoticeOpen(false);
-              applyTool('image');
+              if (tool !== 'image') applyTool('image');
+              else inputRef.current?.focus();
             }}>확인</button>
           </div>
         </Dialog.Content>

@@ -1,0 +1,220 @@
+export type BrowserEnvironment = {
+  BROWSERLESS_API_TOKEN?: string;
+  BROWSERLESS_ENDPOINT?: string;
+};
+
+export type BrowserCapture = {
+  id: string; url: string; title: string; text: string;
+  screenshot?: string; links: Array<{ url: string; title: string }>; created_at: number;
+};
+
+class BrowserRequestError extends Error {
+  constructor(message: string, readonly status = 400, readonly code = 'BROWSER_REQUEST_INVALID') {
+    super(message);
+  }
+}
+
+const json = (data: unknown, status = 200) => Response.json(data, {
+  status, headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' },
+});
+const browserlessHosts = new Set([
+  'production-sfo.browserless.io', 'production-lon.browserless.io', 'production-ams.browserless.io',
+]);
+
+/** Public website navigation only. Literal IPs and nonstandard ports are excluded. */
+export function normalizeBrowserUrl(value: unknown): string {
+  if (typeof value !== 'string' || !value.trim() || value.length > 4096 || /[\u0000-\u001f\u007f]/.test(value)) {
+    throw new BrowserRequestError('열 웹페이지의 주소를 입력해 주세요.');
+  }
+  let url: URL;
+  try { url = new URL(value.trim()); } catch { throw new BrowserRequestError('http:// 또는 https://로 시작하는 주소를 입력해 주세요.'); }
+  const hostname = url.hostname.toLowerCase();
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password
+    || (url.port && !['80', '443'].includes(url.port))
+    || !hostname.includes('.') || hostname.endsWith('.')
+    || /^[\d.]+$/.test(hostname) || hostname.includes(':')
+    || /(?:^|\.)(?:localhost|local|internal|lan|home|test|invalid|onion)$/.test(hostname)
+    || !/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/.test(hostname)) {
+    throw new BrowserRequestError('공개된 웹사이트의 주소만 열 수 있습니다. 로컬 주소, IP 주소, 로그인 정보가 포함된 주소는 사용할 수 없습니다.');
+  }
+  return url.href;
+}
+
+export function browserlessEndpoint(env: BrowserEnvironment): URL {
+  let endpoint: URL;
+  try { endpoint = new URL(env.BROWSERLESS_ENDPOINT || 'https://production-sfo.browserless.io/function'); }
+  catch { throw new BrowserRequestError('원격 브라우저 연결 주소를 확인해 주세요.', 503, 'BROWSER_NOT_CONFIGURED'); }
+  if (endpoint.protocol !== 'https:' || !browserlessHosts.has(endpoint.hostname)
+    || endpoint.username || endpoint.password || endpoint.port || endpoint.search || endpoint.hash
+    || !['/', '/function'].includes(endpoint.pathname)) {
+    throw new BrowserRequestError('공식 Browserless HTTPS 연결 주소가 필요합니다.', 503, 'BROWSER_NOT_CONFIGURED');
+  }
+  endpoint.pathname = '/function';
+  return endpoint;
+}
+
+// This fixed program is sent to Browserless, never user-provided executable code.
+// Its REST function creates an isolated browser and closes it after the response.
+// Only the managed fleet is accepted, preserving its private-network blocklist.
+export const BROWSER_CAPTURE_PROGRAM = `export default async ({ page, context }) => {
+  const publicUrl = value => {
+    try {
+      const u = new URL(value);
+      const h = u.hostname.toLowerCase();
+      return ['http:', 'https:'].includes(u.protocol) && !u.username && !u.password
+        && (!u.port || ['80', '443'].includes(u.port)) && h.includes('.') && !h.endsWith('.')
+        && !/^[\\d.]+$/.test(h) && !h.includes(':')
+        && !/(?:^|\\.)(?:localhost|local|internal|lan|home|test|invalid|onion)$/.test(h)
+        && /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/.test(h);
+    } catch { return false; }
+  };
+  if (!publicUrl(context.url)) throw new Error('Unsupported navigation address');
+  await page.setViewport({ width: 1280, height: 800, deviceScaleFactor: 1 });
+  await page.setRequestInterception(true);
+  page.on('request', request => {
+    const permitted = publicUrl(request.url()) && ['GET', 'HEAD'].includes(request.method())
+      && request.resourceType() !== 'media';
+    (permitted ? request.continue() : request.abort()).catch(() => {});
+  });
+  page.on('dialog', dialog => dialog.dismiss().catch(() => {}));
+  page.on('popup', popup => popup.close().catch(() => {}));
+  const response = await page.goto(context.url, { waitUntil: 'domcontentloaded', timeout: 20000 });
+  if (!response || response.status() >= 400) throw new Error('The website could not be opened');
+  try { await page.waitForNetworkIdle({ idleTime: 400, timeout: 2500 }); } catch {}
+  if (!publicUrl(page.url())) throw new Error('Unsupported redirect');
+  const result = await page.evaluate(() => ({
+    url: location.href,
+    title: document.title.slice(0, 300),
+    text: (document.body?.innerText || '').slice(0, 48000),
+    links: Array.from(document.querySelectorAll('a[href]')).slice(0, 200)
+      .map(a => ({ url: a.href, title: (a.innerText || a.getAttribute('aria-label') || a.href).trim().slice(0, 160) }))
+  }));
+  result.links = result.links.filter(link => publicUrl(link.url)).slice(0, 60);
+  const image = await page.screenshot({ type: 'jpeg', quality: 55, encoding: 'base64', fullPage: false });
+  if (image.length <= 480000) result.screenshot = image;
+  return { data: result, type: 'application/json' };
+};`;
+
+async function boundedJson(response: Response): Promise<Record<string, unknown>> {
+  if (!response.body) throw new BrowserRequestError('원격 브라우저가 응답을 반환하지 않았습니다.', 502, 'BROWSER_RESPONSE_INVALID');
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let bytes = 0, body = '';
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > 1_000_000) {
+        await reader.cancel();
+        throw new BrowserRequestError('웹페이지 결과가 저장 한도를 넘었습니다.', 413, 'BROWSER_RESULT_TOO_LARGE');
+      }
+      body += decoder.decode(value, { stream: true });
+    }
+    body += decoder.decode();
+  } finally { reader.releaseLock(); }
+  try {
+    const parsed: unknown = JSON.parse(body);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
+  } catch { /* Return only the application error, never upstream diagnostics. */ }
+  throw new BrowserRequestError('원격 브라우저 결과를 읽지 못했습니다.', 502, 'BROWSER_RESPONSE_INVALID');
+}
+
+function captureContent(raw: Record<string, unknown>) {
+  const data = raw.data && typeof raw.data === 'object' && !Array.isArray(raw.data)
+    ? raw.data as Record<string, unknown> : raw;
+  if (typeof data.text !== 'string' || typeof data.title !== 'string' || typeof data.url !== 'string') {
+    throw new BrowserRequestError('원격 브라우저가 페이지 내용을 반환하지 않았습니다.', 502, 'BROWSER_RESPONSE_INVALID');
+  }
+  const url = normalizeBrowserUrl(data.url);
+  const links: BrowserCapture['links'] = [];
+  const seen = new Set<string>();
+  for (const rawLink of Array.isArray(data.links) ? data.links.slice(0, 200) : []) {
+    if (!rawLink || typeof rawLink !== 'object' || typeof rawLink.title !== 'string') continue;
+    try {
+      const linkUrl = normalizeBrowserUrl(rawLink.url);
+      if (!seen.has(linkUrl)) { links.push({ url: linkUrl, title: rawLink.title.slice(0, 160) }); seen.add(linkUrl); }
+    } catch { /* Drop unsupported navigation targets from page-provided links. */ }
+    if (links.length >= 60) break;
+  }
+  const screenshot = typeof data.screenshot === 'string' && data.screenshot.length <= 480000
+    && /^\/9j\/[A-Za-z0-9+/]*={0,2}$/.test(data.screenshot)
+    ? 'data:image/jpeg;base64,' + data.screenshot : undefined;
+  return { url, title: data.title.slice(0, 300) || new URL(url).hostname, text: data.text.slice(0, 48000), links, screenshot };
+}
+
+async function reserveDailyVisit(sql: D1Database, owner: string, now: number) {
+  const day = Math.floor(now / 86_400_000), expiresAt = (day + 1) * 86_400_000;
+  for (const [key, limit] of [[`browser:day:user:${owner}:${day}`, 5], [`browser:day:global:${day}`, 50]] as const) {
+    const reserved = await sql.prepare('INSERT INTO rate_limits (key,count,expires_at) VALUES (?,1,?) ON CONFLICT(key) DO UPDATE SET count=count+1 WHERE count<? RETURNING count')
+      .bind(key, expiresAt, limit).first<{ count: number }>();
+    if (!reserved) throw new BrowserRequestError('오늘의 원격 브라우저 이용 한도에 도달했습니다. 내일 다시 시도해 주세요.', 429, 'BROWSER_DAILY_LIMIT');
+  }
+}
+
+export async function handleBrowser(req: Request, path: string[], sql: D1Database, owner: string, env: BrowserEnvironment): Promise<Response | null> {
+  if (path[0] !== 'browser' || path[1] !== 'sessions') return null;
+  try {
+    if (path.length === 2 && req.method === 'GET') {
+      const sessions = (await sql.prepare('SELECT id,url,title,created_at FROM browser_sessions WHERE user_id=? ORDER BY created_at DESC LIMIT 100').bind(owner).all()).results;
+      return json({ configured: !!env.BROWSERLESS_API_TOKEN, sessions });
+    }
+    if (path.length === 2 && req.method === 'DELETE') {
+      await sql.prepare('DELETE FROM browser_sessions WHERE user_id=?').bind(owner).run();
+      return json({ deleted: true });
+    }
+    if (path.length === 3 && ['GET', 'DELETE'].includes(req.method)) {
+      const row = await sql.prepare('SELECT id,url,title,content,created_at FROM browser_sessions WHERE id=? AND user_id=?').bind(path[2], owner)
+        .first<{ id: string; url: string; title: string; content: string; created_at: number }>();
+      if (!row) return json({ error: '저장된 원격 페이지를 찾을 수 없습니다.' }, 404);
+      if (req.method === 'DELETE') {
+        await sql.prepare('DELETE FROM browser_sessions WHERE id=? AND user_id=?').bind(path[2], owner).run();
+        return json({ deleted: true });
+      }
+      const content = JSON.parse(row.content) as Pick<BrowserCapture, 'text' | 'screenshot' | 'links'>;
+      return json({ id: row.id, url: row.url, title: row.title, created_at: row.created_at, ...content });
+    }
+    if (path.length !== 2 || req.method !== 'POST') return json({ error: '지원하지 않는 브라우저 요청입니다.' }, 405);
+    const body: unknown = await req.json();
+    if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some(key => key !== 'url')) {
+      throw new BrowserRequestError('열 웹페이지의 주소만 전달해 주세요.');
+    }
+    const url = normalizeBrowserUrl((body as Record<string, unknown>).url);
+    if (!env.BROWSERLESS_API_TOKEN) throw new BrowserRequestError('원격 브라우저가 연결되지 않았습니다. AI 연결 설정에서 Browserless 연결 상태를 확인해 주세요. 현재 브라우저에서는 이 링크를 열지 않았습니다.', 503, 'BROWSER_NOT_CONFIGURED');
+    const endpoint = browserlessEndpoint(env);
+    endpoint.searchParams.set('token', env.BROWSERLESS_API_TOKEN);
+    const now = Date.now(), lockKey = `browser:active:${owner}`, lockExpires = now + 45000;
+    const lock = await sql.prepare('INSERT INTO rate_limits (key,count,expires_at) VALUES (?,1,?) ON CONFLICT(key) DO UPDATE SET count=1,expires_at=excluded.expires_at WHERE expires_at<? RETURNING key')
+      .bind(lockKey, lockExpires, now).first();
+    if (!lock) throw new BrowserRequestError('열고 있는 원격 페이지가 있습니다. 완료 후 다시 시도해 주세요.', 409, 'BROWSER_BUSY');
+    try {
+      const count = await sql.prepare('SELECT COUNT(*) AS n FROM browser_sessions WHERE user_id=?').bind(owner).first<{ n: number }>();
+      if ((count?.n || 0) >= 100) throw new BrowserRequestError('원격 페이지를 최대 100개까지 저장할 수 있습니다. 브라우저 설정에서 이전 기록을 삭제해 주세요.', 409, 'BROWSER_HISTORY_LIMIT');
+      await reserveDailyVisit(sql, owner, now);
+      const response = await fetch(endpoint.href, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: BROWSER_CAPTURE_PROGRAM, context: { url } }),
+        signal: AbortSignal.any([req.signal, AbortSignal.timeout(35000)]), redirect: 'error',
+      });
+      if (!response.ok) {
+        await response.body?.cancel();
+        const unavailable = response.status === 401 || response.status === 403;
+        throw new BrowserRequestError(unavailable ? '원격 브라우저 인증 또는 사용 권한을 확인해 주세요.' : response.status === 429 ? '원격 브라우저 사용 한도에 도달했습니다. 잠시 후 다시 시도해 주세요.' : '원격 페이지를 열지 못했습니다. 주소와 웹사이트 접근 권한을 확인해 주세요.', unavailable ? 503 : 502, 'BROWSER_PROVIDER_ERROR');
+      }
+      const capture = captureContent(await boundedJson(response));
+      const id = crypto.randomUUID(), created_at = Date.now();
+      const content = JSON.stringify({ text: capture.text, screenshot: capture.screenshot, links: capture.links });
+      if (new TextEncoder().encode(content).length > 850000) throw new BrowserRequestError('웹페이지가 저장 한도를 넘었습니다.', 413, 'BROWSER_RESULT_TOO_LARGE');
+      await sql.prepare('INSERT INTO browser_sessions (id,user_id,url,title,content,created_at) VALUES (?,?,?,?,?,?)')
+        .bind(id, owner, capture.url, capture.title, content, created_at).run();
+      return json({ id, ...capture, created_at }, 201);
+    } finally {
+      await sql.prepare('DELETE FROM rate_limits WHERE key=? AND expires_at=?').bind(lockKey, lockExpires).run();
+    }
+  } catch (error) {
+    if (error instanceof BrowserRequestError) return json({ error: error.message, code: error.code }, error.status);
+    if (error instanceof SyntaxError) return json({ error: '요청 내용을 읽을 수 없습니다.' }, 400);
+    if (error instanceof Error && ['AbortError', 'TimeoutError'].includes(error.name)) return json({ error: '원격 페이지 요청이 중지되었거나 시간이 초과되었습니다.', code: 'BROWSER_TIMEOUT' }, 504);
+    return json({ error: '원격 페이지를 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.', code: 'BROWSER_UNAVAILABLE' }, 502);
+  }
+}

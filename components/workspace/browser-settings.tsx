@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { Dialog } from 'radix-ui';
 import { AlertCircle, ChevronDown, LoaderCircle, Trash2 } from 'lucide-react';
 
 export type BrowserPreferences = {
@@ -66,9 +67,11 @@ async function requestPreferences(options: RequestInit): Promise<BrowserPreferen
   return readPreferences(data);
 }
 
-export function BrowserSettingsPage({ signedIn, onNotice }: {
+export function BrowserSettingsPage({ signedIn, onNotice, remoteConfigured = false, onNavigate }: {
   signedIn: boolean;
   onNotice?: (message: string) => void;
+  remoteConfigured?: boolean;
+  onNavigate?: (path: string) => void;
 }) {
   const [preferences, setPreferences] = useState<BrowserPreferences>(defaultPreferences);
   const [loaded, setLoaded] = useState(false);
@@ -76,7 +79,11 @@ export function BrowserSettingsPage({ signedIn, onNotice }: {
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
   const [attempt, setAttempt] = useState(0);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleted, setDeleted] = useState(false);
   const saveController = useRef<AbortController | null>(null);
+  const deleteController = useRef<AbortController | null>(null);
   const saveInProgress = useRef(false);
 
   useEffect(() => {
@@ -106,6 +113,7 @@ export function BrowserSettingsPage({ signedIn, onNotice }: {
     return () => {
       controller.abort();
       saveController.current?.abort();
+      deleteController.current?.abort();
       saveInProgress.current = false;
     };
   }, [signedIn, attempt]);
@@ -156,6 +164,26 @@ export function BrowserSettingsPage({ signedIn, onNotice }: {
     }
   }
 
+  async function deleteRemoteData() {
+    if (deleting || !signedIn) return;
+    const controller = new AbortController();
+    deleteController.current = controller;
+    setDeleting(true); setError(''); setDeleted(false);
+    try {
+      const response = await fetch('/api/browser/sessions', { method: 'DELETE', credentials: 'same-origin', signal: controller.signal });
+      const result = await response.json() as { error?: string; deleted?: boolean };
+      if (!response.ok || !result.deleted) throw new Error(result.error || '원격 브라우저 기록을 삭제하지 못했습니다.');
+      if (!controller.signal.aborted) {
+        setDeleted(true); setDeleteOpen(false);
+        onNotice?.('저장된 원격 페이지와 미리보기를 삭제했습니다.');
+      }
+    } catch (cause) {
+      if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : '원격 브라우저 기록을 삭제하지 못했습니다.');
+    } finally { if (!controller.signal.aborted) setDeleting(false); }
+  }
+
+  function navigate(path: string) { if (onNavigate) onNavigate(path); else window.location.assign(path); }
+
   return (
     <section className="prism-browser-page" aria-labelledby="prism-browser-title">
       <header className="prism-browser-heading">
@@ -181,27 +209,29 @@ export function BrowserSettingsPage({ signedIn, onNotice }: {
               <span id="prism-browser-current-description">지금 사용 중인 브라우저의 새 탭에서 링크를 엽니다.</span>
             </span>
           </label>
-          <label className="prism-browser-option is-unavailable">
+          <label className="prism-browser-option">
             <input
               type="radio"
               name="prism-browser-target"
               value="remote"
               checked={preferences.browserTarget === 'remote'}
-              disabled
+              onChange={() => { void save({ browserTarget: 'remote' }); }}
               aria-describedby="prism-browser-remote-description"
             />
             <span>
               <strong>원격 브라우저만 사용</strong>
-              <span id="prism-browser-remote-description">원격 브라우저 서비스가 아직 연결되지 않았습니다.</span>
+              <span id="prism-browser-remote-description">{remoteConfigured ? '격리된 원격 브라우저에서 페이지를 읽고 미리보기를 저장합니다.' : '원격 브라우저 연결이 필요합니다. 이 설정을 선택하면 현재 기기에서 외부 링크를 열지 않습니다.'}</span>
             </span>
           </label>
         </fieldset>
+        {!remoteConfigured && <button type="button" className="prism-action-button" onClick={() => navigate('/settings')}>원격 브라우저 연결 상태 확인</button>}
+        {remoteConfigured && <button type="button" className="prism-action-button" onClick={() => navigate('/browser')}>원격 브라우저 열기</button>}
       </section>
 
       <section className="prism-browser-row" aria-labelledby="prism-browser-permission-title">
         <div>
           <h2 id="prism-browser-permission-title">권한</h2>
-          <p id="prism-browser-permission-description">Prism에서 외부 링크를 열기 전에 확인할지 선택하세요. 현재 브라우저의 새 탭에 적용됩니다.</p>
+          <p id="prism-browser-permission-description">Prism에서 외부 링크를 열기 전에 확인할지 선택하세요. 선택한 브라우저 방식에 적용됩니다.</p>
         </div>
         <div className="prism-browser-select">
           <select
@@ -226,15 +256,17 @@ export function BrowserSettingsPage({ signedIn, onNotice }: {
       <section className="prism-browser-row prism-browser-data" aria-labelledby="prism-browser-data-title">
         <div>
           <h2 id="prism-browser-data-title">원격 브라우저 데이터 삭제</h2>
-          <p id="prism-browser-data-description">원격 브라우저 세션이 없어 삭제할 사용 기록과 쿠키가 없습니다. 현재 기기의 데이터는 브라우저 설정에서 관리할 수 있습니다.</p>
+          <p id="prism-browser-data-description">Prism에 저장된 원격 페이지 주소, 본문, 미리보기를 삭제합니다. 원격 세션과 쿠키는 각 요청이 끝나면 종료되며, 현재 기기의 브라우저 데이터는 변경하지 않습니다.</p>
         </div>
         <button
           className="prism-browser-delete"
           type="button"
-          disabled
+          disabled={deleting}
+          onClick={() => { if (!signedIn) { navigate('/login'); return; } setDeleted(false); setDeleteOpen(true); }}
           aria-describedby="prism-browser-data-description"
-        ><Trash2 size={18} aria-hidden="true" />삭제</button>
+        ><Trash2 size={18} aria-hidden="true" />{signedIn ? '삭제' : '로그인 후 삭제'}</button>
       </section>
+      {deleted && <p className="prism-browser-local-note" role="status">저장된 원격 페이지와 미리보기를 삭제했습니다.</p>}
 
       <div className="prism-browser-status" aria-live="polite" aria-atomic="true">
         {saving || (!loaded && !error)
@@ -246,6 +278,14 @@ export function BrowserSettingsPage({ signedIn, onNotice }: {
         {!loaded && <button type="button" onClick={() => setAttempt((value) => value + 1)}>다시 시도</button>}
       </div>}
       {!signedIn && <p className="prism-browser-local-note">로그인하지 않은 상태에서는 이 브라우저에 설정이 저장됩니다.</p>}
+      <Dialog.Root open={deleteOpen} onOpenChange={open => { if (!deleting) setDeleteOpen(open); }}>
+        <Dialog.Portal><Dialog.Overlay className="prism-dialog-overlay" /><Dialog.Content className="prism-confirm-dialog prism-integration-confirm">
+          <Dialog.Title>원격 브라우저 기록을 삭제할까요?</Dialog.Title>
+          <Dialog.Description>내 계정에 저장된 원격 페이지 본문과 미리보기를 모두 삭제합니다. 삭제한 기록은 복원할 수 없습니다.</Dialog.Description>
+          {error && <p role="alert" className="prism-form-error">{error}</p>}
+          <div className="prism-setting-actions"><Dialog.Close asChild><button type="button" className="prism-action-button" disabled={deleting}>취소</button></Dialog.Close><button type="button" className="prism-action-button danger" disabled={deleting} onClick={() => { void deleteRemoteData(); }}>{deleting ? <LoaderCircle size={16} className="spin" /> : <Trash2 size={16} />}기록 삭제</button></div>
+        </Dialog.Content></Dialog.Portal>
+      </Dialog.Root>
     </section>
   );
 }

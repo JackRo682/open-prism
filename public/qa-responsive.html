@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>OpenPrism responsive verification</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#e9edf3;color:#182234;font:15px/1.5 system-ui,sans-serif}header{padding:20px 24px;background:#fff;border-bottom:1px solid #d3dae5}h1{margin:0 0 8px;font-size:22px}p{margin:4px 0}label{display:inline-flex;align-items:center;gap:8px;margin:8px 16px 0 0}select,button{font:inherit;padding:8px 12px;border:1px solid #ccd3de;border-radius:8px;background:#fff}main{display:flex;gap:24px;align-items:flex-start;padding:24px;overflow:auto}section{flex:none}h2{font-size:16px;margin:0 0 10px}iframe{display:block;background:#101119;border:0;box-shadow:0 2px 18px #19243722;border-radius:12px}small{color:#586779}
+</style></head>
+<body><header><h1>OpenPrism responsive verification</h1><p>Each frame loads the real application at the stated CSS viewport width.</p><p><small>This verifies responsive layout. It does not emulate touch hardware, a mobile keyboard, or a mobile browser engine.</small></p>
+<label>Page <select id="page"><option value="/chat">Chat</option><option value="/images">Images</option><option value="/videos">Video</option><option value="/scheduled">Tasks</option><option value="/notebooks/new">Notebook</option><option value="/customize">Customize</option><option value="/browser-settings">Browser settings</option></select></label>
+<button id="reload" type="button">Reload frames</button></header>
+<main><section><h2>320 × 740</h2><iframe title="OpenPrism at 320 pixels" width="320" height="740" src="/chat"></iframe></section><section><h2>360 × 800</h2><iframe title="OpenPrism at 360 pixels" width="360" height="800" src="/chat"></iframe></section><section><h2>390 × 844</h2><iframe title="OpenPrism at 390 pixels" width="390" height="844" src="/chat"></iframe></section></main>
+<script>
+const selector=document.getElementById('page');
+function refresh(){for(const frame of document.querySelectorAll('iframe'))frame.src=selector.value;}
+selector.addEventListener('change',refresh);document.getElementById('reload').addEventListener('click',refresh);
+</script></body></html>

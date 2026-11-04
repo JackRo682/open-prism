@@ -1,0 +1,45 @@
+.prism-integration-page{width:min(100%,1120px);margin:0 auto;padding:40px 28px 64px;color:var(--prism-ink)}
+.prism-integration-page>header{margin-bottom:28px}.prism-integration-page>header h1{font-size:32px;line-height:1.4;font-weight:400;letter-spacing:-.6px;margin:10px 0}
+.prism-integration-page>header p{max-width:660px;color:var(--prism-muted);font-size:14px;line-height:1.8}
+.prism-integration-eyebrow{display:inline-flex;align-items:center;gap:8px;color:var(--prism-muted);font-size:13px}
+.prism-integration-card{padding:24px;border:1px solid var(--prism-border);border-radius:20px;background:var(--prism-surface);margin-bottom:24px}
+.prism-integration-card h2{font-size:18px;font-weight:500;line-height:1.6;margin:0 0 8px}.prism-integration-card p{font-size:14px;line-height:1.8;color:var(--prism-muted);margin:0 0 16px}
+.prism-integration-status,.prism-integration-error{display:flex;align-items:flex-start;gap:10px;font-size:14px;line-height:1.7;margin:18px 0;overflow-wrap:anywhere}
+.prism-integration-status{color:var(--prism-muted)}.prism-integration-error{color:var(--prism-danger)}
+.prism-integration-status>svg,.prism-integration-error>svg{flex-shrink:0;margin-top:3px}
+.prism-browser-address{margin-bottom:24px}.prism-browser-address>label{display:block;font-size:13px;margin-bottom:8px;color:var(--prism-muted)}
+.prism-browser-address>div{display:flex;align-items:center;gap:10px;padding:8px 10px 8px 16px;background:var(--prism-composer);border:1px solid var(--prism-border);border-radius:24px}
+.prism-browser-address input{flex:1;min-width:0;width:100%;border:0;background:transparent;color:var(--prism-ink);font-size:16px;line-height:24px;padding:6px 0}
+.prism-browser-address>div>button{display:grid;place-items:center;width:40px;height:40px;flex-shrink:0;border-radius:50%;color:var(--prism-accent);background:var(--prism-hover)}
+.prism-browser-address small{display:block;margin:8px 12px 0;color:var(--prism-muted);font-size:12px;line-height:1.8}
+.prism-browser-layout{display:grid;grid-template-columns:minmax(0,1fr) 220px;gap:20px;align-items:start}
+.prism-browser-capture{min-width:0;border:1px solid var(--prism-border);border-radius:20px;background:var(--prism-surface);overflow:hidden}
+.prism-browser-capture>header{padding:20px;border-bottom:1px solid var(--prism-border)}.prism-browser-capture>header h2{font-size:18px;font-weight:500;line-height:1.6;overflow-wrap:anywhere;margin:0 0 6px}
+.prism-browser-capture>header p{font-size:12px;color:var(--prism-muted);overflow-wrap:anywhere;margin:0 0 6px}.prism-browser-capture>header small{font-size:11px;color:var(--prism-muted)}
+.prism-browser-tabs{display:flex;gap:8px;padding:12px 16px}.prism-browser-tabs button{display:inline-flex;align-items:center;gap:7px;min-height:36px;border-radius:99px;padding:6px 14px;font-size:13px;color:var(--prism-muted)}
+.prism-browser-tabs button[aria-selected='true']{background:var(--prism-selected);color:var(--prism-ink)}
+.prism-browser-screenshot{display:block;width:100%;height:auto;object-fit:contain;background:var(--prism-page)}
+.prism-browser-text{white-space:pre-wrap;overflow-wrap:anywhere;font-size:14px;line-height:1.9;padding:20px;max-height:650px;overflow:auto}
+.prism-browser-empty{display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;min-height:280px;padding:32px 20px;text-align:center;color:var(--prism-muted)}
+.prism-browser-empty h2{font-size:18px;font-weight:400;color:var(--prism-ink)}.prism-browser-empty p{font-size:13px;line-height:1.8;max-width:360px}
+.prism-browser-links{padding:20px;border-top:1px solid var(--prism-border)}.prism-browser-links h3{font-size:14px;font-weight:500;margin:0 0 10px}
+.prism-browser-links>button{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;min-height:36px;padding:8px;border-radius:10px;text-align:left;color:var(--prism-accent);font-size:13px;line-height:1.6}
+.prism-browser-links>button>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.prism-browser-links>button:hover{background:var(--prism-hover)}
+.prism-browser-history{min-width:0;border:1px solid var(--prism-border);border-radius:20px;padding:16px;background:var(--prism-surface)}
+.prism-browser-history h2{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:500;margin:0 0 12px}.prism-browser-history>p{font-size:12px;color:var(--prism-muted);line-height:1.8}
+.prism-browser-history>button{display:block;width:100%;text-align:left;padding:10px 8px;border-radius:12px;font-size:12px;line-height:1.5}
+.prism-browser-history>button:hover,.prism-browser-history>button[aria-pressed='true']{background:var(--prism-hover)}
+.prism-browser-history strong{display:block;font-size:13px;font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.prism-browser-history small{display:block;color:var(--prism-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:3px}
+.prism-browser-history>.prism-browser-history-settings{color:var(--prism-accent);margin-top:12px;border-top:1px solid var(--prism-border);border-radius:0;padding-top:16px}
+.prism-drive-dialog .prism-dialog-heading h2{display:flex;align-items:center;gap:10px}.prism-drive-dialog .prism-drive-privacy{font-size:12px;line-height:1.8}
+.prism-drive-dialog .prism-integration-card{padding:18px;margin-bottom:0}.prism-drive-dialog .prism-integration-card h2{font-size:17px}
+.prism-integration-confirm{max-width:480px;padding:28px}.prism-integration-confirm h2{font-size:22px;line-height:1.5;font-weight:500;margin:0 0 12px}.prism-integration-confirm p{font-size:14px;line-height:1.8;color:var(--prism-muted);margin:0 0 20px}
+.prism-integration-confirm .prism-setting-actions{justify-content:flex-end;flex-wrap:wrap}
+@media(max-width:1050px){.prism-browser-layout{grid-template-columns:minmax(0,1fr)}.prism-browser-history{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}.prism-browser-history>h2,.prism-browser-history>p,.prism-browser-history>.prism-browser-history-settings{grid-column:1/-1}}
+@media(max-width:767px){
+  .prism-integration-page{padding:24px 16px max(40px,env(safe-area-inset-bottom,0px))}.prism-integration-page>header h1{font-size:28px}
+  .prism-integration-card{padding:20px}.prism-browser-address>div{padding-left:12px}.prism-browser-address>div>button{width:44px;height:44px}
+  .prism-browser-tabs button,.prism-browser-links>button,.prism-browser-history>button,.prism-integration-page .prism-action-button,.prism-drive-dialog .prism-action-button,.prism-integration-confirm .prism-action-button{min-height:44px}
+  .prism-browser-text{max-height:calc(var(--prism-viewport-height,100dvh) - 180px)}.prism-browser-history{grid-template-columns:minmax(0,1fr)}
+  .prism-integration-confirm{top:calc(var(--prism-viewport-height,100dvh)/2);max-height:calc(var(--prism-viewport-height,100dvh) - 24px);padding:24px;overflow-y:auto}
+}

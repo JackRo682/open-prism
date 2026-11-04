@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import { cookies } from 'next/headers';
 import './globals.css';
 import './reference-shell.css';
@@ -7,6 +7,9 @@ import '../components/workspace/settings.css';
 import '../components/workspace/composer-modes.css';
 import '../components/workspace/browser-settings.css';
 import '../components/workspace/creative-workspace.css';
+import '../components/workspace/workspace-features.css';
+import '../components/workspace/integrations.css';
+export const viewport: Viewport = { width: 'device-width', initialScale: 1, viewportFit: 'cover', interactiveWidget: 'resizes-content' };
 export const metadata:Metadata={title:'Prism — Your AI workspace',description:'One calm workspace for GPT, Claude, and Gemini. Think deeper, compare perspectives, and make more of your ideas.',icons:{icon:'/favicon.svg'}};
 export default async function RootLayout({children}:{children:React.ReactNode}) {
   const preference = (await cookies()).get('prism-theme')?.value;

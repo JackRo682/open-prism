@@ -280,3 +280,12 @@
   .prism-dialog-overlay { animation: none; }
   .prism-switch-thumb { transition: none; }
 }
+.prism-signin-hint { margin:12px 4px 0; color:var(--muted-foreground,#9ca3af); font-size:13px; line-height:1.6; text-align:center; }
+.prism-signin-hint a { color:var(--text,#d5dcff); text-decoration:underline; text-underline-offset:3px; }
+.prism-customize-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; }
+.prism-customize-card { display:flex; flex-direction:column; align-items:flex-start; text-align:left; gap:10px; cursor:pointer; }
+.prism-customize-card > svg:last-child { align-self:flex-end; }
+.prism-customize-card:hover { border-color:var(--text-secondary,#949bb0); }
+.prism-music-page audio { width:100%; margin:16px 0; }
+.response-text a { text-decoration:underline; text-underline-offset:3px; overflow-wrap:anywhere; }
+@media(max-width:600px) { .prism-customize-grid { grid-template-columns:minmax(0,1fr); } .prism-signin-hint { font-size:12px; } }
