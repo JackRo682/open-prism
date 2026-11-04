@@ -12,10 +12,10 @@ function prepare(query){let params=[];return {bind(...values){params=values;retu
 const env={DB:{prepare,async batch(items){sqlite.exec('BEGIN');try{const out=[];for(const item of items)out.push(await item.run());sqlite.exec('COMMIT');return out;}catch(e){sqlite.exec('ROLLBACK');throw e;}}},BUCKET:{async put(key,value){bucket.set(key,value)},async get(key){return bucket.has(key)?{text:async()=>bucket.get(key)}:null},async delete(key){bucket.delete(key)}}};
 globalThis.__prismTest={env,getUser:async()=>user};
 await writeFile(new URL('context.mjs',dir),'export const env=globalThis.__prismTest.env; export const getChatGPTUser=globalThis.__prismTest.getUser;');
-for(const [source,dest] of [['lib/models.ts','models.mjs'],['lib/provider.ts','provider.mjs'],['lib/billing.ts','billing.mjs'],['lib/beta.ts','beta.mjs'],['app/api/[...path]/route.ts','route.mjs']]){
+for(const [source,dest] of [['lib/models.ts','models.mjs'],['lib/provider.ts','provider.mjs'],['lib/billing.ts','billing.mjs'],['lib/beta.ts','beta.mjs'],['lib/workspace-settings.ts','workspace-settings.mjs'],['app/api/[...path]/route.ts','route.mjs']]){
  let code=await readFile(new URL('../'+source,import.meta.url),'utf8');
  code=code.replaceAll("'cloudflare:workers'","'./context.mjs'").replaceAll("'../../chatgpt-auth'","'./context.mjs'").replaceAll("'../../../lib/models'","'./models.mjs'").replaceAll("'../../../lib/provider'","'./provider.mjs'");
- code=code.replaceAll("'../../../lib/billing'","'./billing.mjs'").replaceAll("'./models'","'./models.mjs'").replaceAll("'../../../lib/beta'","'./beta.mjs'").replaceAll("'./billing'","'./billing.mjs'");
+ code=code.replaceAll("'../../../lib/workspace-settings'","'./workspace-settings.mjs'").replaceAll("'../../../lib/billing'","'./billing.mjs'").replaceAll("'./models'","'./models.mjs'").replaceAll("'../../../lib/beta'","'./beta.mjs'").replaceAll("'./billing'","'./billing.mjs'");
  const js=ts.transpileModule(code,{compilerOptions:{module:ts.ModuleKind.ESNext,target:ts.ScriptTarget.ES2022}}).outputText;
  await writeFile(new URL(dest,dir),js);
 }
@@ -26,7 +26,7 @@ async function call(path,method='GET',body,headers){return route[method](req(pat
 function mockSSE(events){return new Response(events.map(e=>'data: '+JSON.stringify(e)+'\n\n').join(''),{headers:{'content-type':'text/event-stream'}});}
 let conversationId;
 const billing=await import(new URL('billing.mjs',dir).href);
-test('anonymous requests cannot access private data',async()=>{user=null;for(const p of ['conversations','usage','files','admin'])assert.equal((await call(p)).status,401);const b=await(await call('bootstrap')).json();assert.equal(b.user,null);user={userId:'alice',email:'alice@example.test',fullName:'Alice'};});
+test('anonymous requests cannot access private data',async()=>{user=null;for(const p of ['conversations','usage','files','admin','settings','search?q=test','shares'])assert.equal((await call(p)).status,401);const b=await(await call('bootstrap')).json();assert.equal(b.user,null);user={userId:'alice',email:'alice@example.test',fullName:'Alice'};});
 test('server secrets never appear in connection status',async()=>{env.OPENAI_API_KEY='test-only-key';const b=await(await call('bootstrap')).json();assert.equal(b.providers.openai.configured,true);assert.equal(JSON.stringify(b).includes('test-only-key'),false);delete env.OPENAI_API_KEY;});
 test('rejects invalid origins and invalid model IDs',async()=>{assert.equal((await call('chat','POST',{prompt:'Hi',model:'gpt-6-astra'},{origin:'https://other.test'})).status,403);assert.equal((await call('chat','POST',{prompt:'Hi',model:'made-up-model'})).status,400);});
 test('missing API credentials produce an explicit error with no artificial response',async()=>{const r=await call('chat','POST',{prompt:'Hi',model:'gpt-6-astra'});assert.equal(r.status,503);assert.equal((await r.json()).code,'PROVIDER_NOT_CONFIGURED');assert.equal(sqlite.prepare('SELECT COUNT(*) as n FROM conversations').get().n,0);});
@@ -42,6 +42,118 @@ test('renaming is validated and deleting a conversation also removes messages',a
 test('Anthropic adapter uses correct endpoint, streaming protocol, and measured usage',async()=>{globalThis.fetch=async(url,opts)=>{assert.equal(url,'https://api.anthropic.com/v1/messages');assert.equal(opts.headers['anthropic-version'],'2023-06-01');assert.equal(JSON.parse(opts.body).thinking.type,'adaptive');return mockSSE([{type:'message_start',message:{usage:{input_tokens:10}}},{type:'content_block_delta',delta:{type:'thinking_delta',thinking:'private'}},{type:'content_block_delta',delta:{type:'text_delta',text:'A clear answer.'}},{type:'message_delta',usage:{output_tokens:20},delta:{stop_reason:'end_turn'}},{type:'message_stop'}]);};let text='';const u=await invokeProvider(MODELS[1],'test-only-key',[{role:'user',content:'Hi'}],'high',false,new AbortController().signal,t=>text+=t);assert.equal(text,'A clear answer.');assert.deepEqual(u,{input:10,output:20});});
 test('Gemini adapter uses Interactions API and normalized responses',async()=>{globalThis.fetch=async(url,opts)=>{assert.equal(url,'https://generativelanguage.googleapis.com/v1beta/interactions');assert.equal(JSON.parse(opts.body).store,false);assert.equal(JSON.parse(opts.body).input[0].type,'user_input');return Response.json({status:'completed',steps:[{type:'model_output',content:[{type:'text',text:'A Gemini answer.'}]}],usage:{total_input_tokens:4,total_output_tokens:5,total_thought_tokens:3}});};let text='';const u=await invokeProvider(MODELS[2],'test-only-key',[{role:'user',content:'Hi'}],'medium',false,new AbortController().signal,t=>text+=t);assert.equal(text,'A Gemini answer.');assert.deepEqual(u,{input:4,output:8});});
 test('truncated streams fail instead of being marked complete',async()=>{globalThis.fetch=async()=>mockSSE([{type:'response.output_text.delta',delta:'partial'}]);await assert.rejects(()=>invokeProvider(MODELS[0],'test-only-key',[{role:'user',content:'Hi'}],'medium',false,new AbortController().signal,()=>{}),/before completing/);});
+
+test('workspace settings validate bounded input and remain isolated across owners',async()=>{
+ sqlite.exec(await readFile(new URL('../drizzle/0003_workspace_settings_and_shares.sql',import.meta.url),'utf8'));
+ const defaults={personalizationEnabled:false,customInstructions:'',memory:'',workResponseStyle:'plan-first',skills:[]};
+ assert.deepEqual(await(await call('settings')).json(),defaults);
+ for(const invalid of [{personalizationEnabled:'yes'},{memory:'x'.repeat(8001)},{customInstructions:'x'.repeat(4001)},{workResponseStyle:'autonomous'},{unknown:true},{skills:[{id:'a',name:'A',instructions:'One'},{id:'a',name:'B',instructions:'Two'}]},{skills:Array.from({length:21},(_,i)=>({id:String(i),name:'Name',instructions:'Text'}))}])assert.equal((await call('settings','PATCH',invalid)).status,400);
+ const prefs={personalizationEnabled:true,customInstructions:'Answer in clear Korean.',memory:'I work on solar research.',workResponseStyle:'direct',skills:[{id:'review',name:'Review',instructions:'Check assumptions and give a critique.'}]};
+ assert.deepEqual(await(await call('settings','PATCH',prefs)).json(),prefs);
+ assert.equal((await call('settings','PATCH',{memory:'wrong'},{origin:'https://other.test'})).status,403);
+ user={userId:'bob',email:'bob@example.test'};
+ assert.deepEqual(await(await call('settings')).json(),defaults);
+ await call('settings','PATCH',{memory:'Bob private memory'});
+ user={userId:'alice',email:'alice@example.test'};
+ assert.equal((await(await call('settings')).json()).memory,prefs.memory);
+ await call('settings','PATCH',{workResponseStyle:'plan-first'});
+ assert.equal((await(await call('settings')).json()).customInstructions,prefs.customInstructions);
+});
+test('fresh owner settings and selected skills affect provider input without polluting stored messages',async()=>{
+ let providerInput='';
+ globalThis.fetch=async(url,options)=>{providerInput=JSON.parse(options.body).input.at(-1).content;return mockSSE([{type:'response.output_text.delta',delta:'Personalized answer.'},{type:'response.completed',response:{usage:{input_tokens:12,output_tokens:7}}}]);};
+ const response=await call('chat','POST',{model:'gpt-6-astra',prompt:'Review my project.',workspaceMode:'work',skillId:'review'});
+ assert.equal(response.status,200);const streamed=await response.text();assert.match(streamed,/"type":"done"/);
+ assert.match(providerInput,/clear Korean/);assert.match(providerInput,/solar research/);assert.match(providerInput,/brief actionable plan/);assert.match(providerInput,/Check assumptions/);
+ const start=streamed.split('\n').filter(line=>line.startsWith('data: ')).map(line=>JSON.parse(line.slice(6))).find(event=>event.type==='start');
+ const messages=(await(await call('conversations/'+start.conversationId)).json()).messages;
+ assert.equal(messages[0].content,'Review my project.');
+ await call('settings','PATCH',{personalizationEnabled:false,workResponseStyle:'direct'});
+ const disabled=await call('chat','POST',{model:'gpt-6-astra',prompt:'Second request.',workspaceMode:'work'});await disabled.text();
+ assert.match(providerInput,/Lead with the requested result or answer/);assert.match(providerInput,/Second request\./);
+ assert.doesNotMatch(providerInput,/clear Korean|solar research|brief actionable plan|Check assumptions/);
+ const explicitSkill=await call('chat','POST',{model:'gpt-6-astra',prompt:'Use my skill.',skillId:'review'});await explicitSkill.text();
+ assert.match(providerInput,/Check assumptions/);assert.doesNotMatch(providerInput,/solar research|responseStyle/);
+ assert.equal((await call('chat','POST',{model:'gpt-6-astra',prompt:'Invalid',workspaceMode:'runner'})).status,400);
+ assert.equal((await call('chat','POST',{model:'gpt-6-astra',prompt:'Invalid',skillId:'missing'})).status,400);
+ await call('settings','PATCH',{personalizationEnabled:false,customInstructions:'',memory:'',workResponseStyle:'plan-first',skills:[]});
+ globalThis.fetch=originalFetch;
+});
+test('conversation search matches message text, escapes wildcards and scopes results to owner',async()=>{
+ const now=Date.now();
+ for(const [id,owner,title,content] of [['search-alice','alice','Research notes','The identifier is 100%_literal and the keyword is nebula.'],['search-bob','bob','Other account','This private nebula document belongs to Bob.']]){
+  sqlite.prepare('INSERT INTO conversations VALUES (?,?,?,?,?,?)').run(id,owner,title,'gpt-6-astra',now,now);
+  sqlite.prepare('INSERT INTO messages VALUES (?,?,?,?,?,?)').run(id+'-msg',id,'user',content,null,now);
+ }
+ const results=(await(await call('search?q=nebula')).json()).results;
+ assert.equal(results.length,1);assert.equal(results[0].id,'search-alice');assert.match(results[0].snippet,/nebula/);
+ assert.equal((await(await call('search?q='+encodeURIComponent('100%_literal'))).json()).results.length,1);
+ assert.equal((await(await call('search?q='+encodeURIComponent('%not-a-wildcard%'))).json()).results.length,0);
+ assert.deepEqual((await(await call('search?q=')).json()).results,[]);
+ assert.equal((await call('search?q='+'a'.repeat(201))).status,400);
+ user={userId:'bob',email:'bob@example.test'};
+ assert.equal((await(await call('search?q=nebula')).json()).results[0].id,'search-bob');
+ user={userId:'alice',email:'alice@example.test'};
+});
+test('public shares use immutable snapshots, exclude attached files and enforce ownership and revocation',async()=>{
+ const now=Date.now();
+ sqlite.prepare('INSERT INTO messages VALUES (?,?,?,?,?,?)').run('share-private-doc','search-alice','user','Read this\n\n<attached_document name="secret.txt">\nPRIVATE DOCUMENT\n</attached_document>\nADDITIONAL PRIVATE DOCUMENT\n</attached_document>',null,now+1);
+ const created=await call('shares','POST',{conversationId:'search-alice'});assert.equal(created.status,201);
+ const share=await created.json();assert.match(share.token,/^[a-f0-9]{64}$/);assert.equal(share.url,'https://prism.test/share/'+share.token);
+ assert.equal((await(await call('shares')).json()).shares.length,1);
+ user={userId:'bob',email:'bob@example.test'};
+ assert.equal((await call('shares','POST',{conversationId:'search-alice'})).status,404);
+ assert.equal((await call('shares/'+share.id,'DELETE')).status,404);
+ assert.equal((await(await call('shares')).json()).shares.length,0);
+ sqlite.prepare('UPDATE messages SET content=? WHERE id=?').run('Changed after sharing','search-alice-msg');
+ user=null;
+ const published=await call('public-shares/'+share.token);assert.equal(published.status,200);assert.equal(published.headers.get('Cache-Control'),'no-store');
+ const data=await published.json();assert.equal(data.title,'Research notes');assert.match(data.messages[0].content,/nebula/);assert.doesNotMatch(JSON.stringify(data),/PRIVATE DOCUMENT/);assert.match(data.messages[1].content,/omitted/);
+ assert.equal((await call('public-shares/invalid')).status,404);
+ user={userId:'alice',email:'alice@example.test'};
+ assert.equal((await call('shares/'+share.id,'DELETE')).status,200);
+ user=null;assert.equal((await call('public-shares/'+share.token)).status,404);
+ user={userId:'alice',email:'alice@example.test'};
+ const second=await(await call('shares','POST',{conversationId:'search-alice'})).json();
+ await call('conversations/search-alice','DELETE');
+ assert.equal((await call('public-shares/'+second.token)).status,404);
+});
+
+test('settings accept maximum valid escaped text while retaining scoped request size limits',async()=>{
+ user={userId:'large-settings',email:'large-settings@example.test'};
+ try{
+  const escaped='\u0001';
+  const settings={personalizationEnabled:true,customInstructions:escaped.repeat(4000),memory:escaped.repeat(8000),workResponseStyle:'plan-first',skills:Array.from({length:20},(_,i)=>({id:'skill-'+i,name:escaped.repeat(60),instructions:escaped.repeat(4000)}))};
+  const bytes=Buffer.byteLength(JSON.stringify(settings));assert.ok(bytes>500000&&bytes<600000);
+  const saved=await call('settings','PATCH',settings);assert.equal(saved.status,200);assert.deepEqual(await saved.json(),settings);
+  const oversized=new Request('https://prism.test/api/settings',{method:'PATCH',body:' '.repeat(600001)});
+  assert.equal((await route.PATCH(oversized)).status,413);
+  const otherMethod=new Request('https://prism.test/api/settings',{method:'POST',body:' '.repeat(200001)});
+  assert.equal((await route.POST(otherMethod)).status,413);
+  const otherEndpoint=new Request('https://prism.test/api/conversations/missing',{method:'PATCH',body:' '.repeat(200001)});
+  assert.equal((await route.PATCH(otherEndpoint)).status,413);
+ }finally{
+  sqlite.prepare('DELETE FROM workspace_settings WHERE user_id=?').run('large-settings');
+  user={userId:'alice',email:'alice@example.test'};
+ }
+});
+test('concurrent public share creation cannot exceed the owner limit',async()=>{
+ user={userId:'share-cap',email:'share-cap@example.test'};
+ const now=Date.now();
+ try{
+  sqlite.prepare('INSERT INTO conversations VALUES (?,?,?,?,?,?)').run('share-cap-chat','share-cap','Limit test','gpt-6-astra',now,now);
+  sqlite.prepare('INSERT INTO messages VALUES (?,?,?,?,?,?)').run('share-cap-message','share-cap-chat','user','A sharable message.',null,now);
+  const insert=sqlite.prepare('INSERT INTO public_shares (id,user_id,conversation_id,token,title,snapshot,created_at) VALUES (?,?,?,?,?,?,?)');
+  for(let i=0;i<99;i++)insert.run('share-cap-'+i,'share-cap','share-cap-chat',i.toString(16).padStart(64,'0'),'Limit test','[]',now);
+  const responses=await Promise.all(Array.from({length:4},()=>call('shares','POST',{conversationId:'share-cap-chat'})));
+  assert.equal(responses.filter(response=>response.status===201).length,1);
+  assert.equal(responses.filter(response=>response.status===400).length,3);
+  assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM public_shares WHERE user_id=?').get('share-cap').n,100);
+ }finally{
+  sqlite.prepare('DELETE FROM conversations WHERE id=?').run('share-cap-chat');
+  user={userId:'alice',email:'alice@example.test'};
+ }
+});
 test('rate limiting is enforced per authenticated user',async()=>{sqlite.prepare('INSERT INTO rate_limits (key,count,expires_at) VALUES (?,20,?) ON CONFLICT(key) DO UPDATE SET count=20').run('alice:'+Math.floor(Date.now()/60000),Date.now()+120000);assert.equal((await call('chat','POST',{model:'gpt-6-astra',prompt:'Excess'})).status,429);globalThis.fetch=originalFetch;delete env.OPENAI_API_KEY;});
 
 test('new wallets cannot spend, including against test-only balances',async()=>{
@@ -110,6 +222,8 @@ test('data deletion rejects cross-origin requests and preserves financial accoun
  assert.equal((await call('account/data','DELETE')).status,200);
  assert.equal(await billing.balance(env.DB,'alice'),before);
  assert.equal((await(await call('conversations')).json()).length,0);
+ assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM workspace_settings WHERE user_id=?').get('alice').n,0);
+ assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM workspace_settings WHERE user_id=?').get('bob').n,1);
 });
 test('missing billable usage cannot silently become free inference',async()=>{
  globalThis.fetch=async()=>mockSSE([{type:'response.output_text.delta',delta:'answer'},{type:'response.completed',response:{}}]);

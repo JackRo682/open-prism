@@ -1,0 +1,13 @@
+{
+  "id": "/",
+  "name": "Prism — Your AI workspace",
+  "short_name": "Prism",
+  "description": "Your personal workspace for AI conversations and documents.",
+  "lang": "ko",
+  "start_url": "/chat",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0f0f0f",
+  "theme_color": "#1f1f1f",
+  "icons": [{"src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"}]
+}

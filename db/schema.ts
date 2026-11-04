@@ -34,3 +34,11 @@ export const billingConfig = sqliteTable('billing_config', {
 export const accountFlags = sqliteTable('account_flags', {
  userId:text('user_id').primaryKey(),reason:text('reason').notNull(),createdAt:integer('created_at').notNull(),
 });
+export const workspaceSettings = sqliteTable('workspace_settings', {
+ userId: text('user_id').primaryKey(), settings: text('settings').notNull(), updatedAt: integer('updated_at').notNull(),
+});
+export const publicShares = sqliteTable('public_shares', {
+ id: text('id').primaryKey(), userId: text('user_id').notNull(),
+ conversationId: text('conversation_id').notNull().references(() => conversations.id, { onDelete: 'cascade' }),
+ token: text('token').notNull().unique(), title: text('title').notNull(), snapshot: text('snapshot').notNull(), createdAt: integer('created_at').notNull(),
+}, t => [index('public_shares_owner').on(t.userId, t.createdAt)]);
