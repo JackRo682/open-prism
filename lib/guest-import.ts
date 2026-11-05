@@ -1,0 +1,59 @@
+/** Guest transcripts are saved only after an authenticated visitor explicitly agrees. */
+export class GuestImportError extends Error {
+  constructor(message: string, public status = 400) { super(message); }
+}
+
+type ImportedTurn = { role: 'user' | 'assistant'; content: string };
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export function validateGuestImport(value: unknown): { sessionId: string; messages: ImportedTurn[] } {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new GuestImportError('저장할 대화를 확인해 주세요.');
+  const data = value as Record<string, unknown>;
+  if (Object.keys(data).some(key => !['sessionId', 'messages'].includes(key)) || typeof data.sessionId !== 'string' || !uuidPattern.test(data.sessionId)) {
+    throw new GuestImportError('저장할 대화의 식별자가 올바르지 않습니다.');
+  }
+  if (!Array.isArray(data.messages) || data.messages.length < 2 || data.messages.length > 40) throw new GuestImportError('저장할 대화의 길이가 올바르지 않습니다.');
+  let bytes = 0;
+  const messages: ImportedTurn[] = data.messages.map((raw: unknown, index: number) => {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new GuestImportError('대화 형식이 올바르지 않습니다.');
+    const turn = raw as Record<string, unknown>;
+    if (Object.keys(turn).some(key => !['role', 'content'].includes(key)) || turn.role !== (index % 2 === 0 ? 'user' : 'assistant') || typeof turn.content !== 'string' || !turn.content.trim()) {
+      throw new GuestImportError('대화 순서나 메시지를 확인해 주세요.');
+    }
+    const length = new TextEncoder().encode(turn.content).length;
+    if (length > 32000) throw new GuestImportError('한 메시지가 저장 가능한 길이를 초과했습니다.', 413);
+    bytes += length;
+    return { role: turn.role as ImportedTurn['role'], content: turn.content };
+  });
+  if (bytes > 100000) throw new GuestImportError('대화가 너무 깁니다. 필요한 내용을 복사해 새 대화로 시작해 주세요.', 413);
+  if (messages.at(-1)?.role !== 'assistant') throw new GuestImportError('응답이 있는 대화만 저장할 수 있습니다.');
+  return { sessionId: data.sessionId.toLowerCase(), messages };
+}
+
+export async function importGuestConversation(sql: D1Database, owner: string, value: unknown) {
+  const { sessionId, messages } = validateGuestImport(value);
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(['guest-import:v1', owner, sessionId])));
+  const conversationId = 'guest-' + Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+  const existing = () => sql.prepare('SELECT id FROM conversations WHERE id=? AND user_id=?').bind(conversationId, owner).first<{ id: string }>();
+  if (await existing()) return { conversationId, reused: true };
+  const now = Date.now();
+  const hour = Math.floor(now / 3600000);
+  const allowed = await sql.prepare(`INSERT INTO rate_limits (key,count,expires_at) VALUES (?,1,?)
+    ON CONFLICT(key) DO UPDATE SET count=count+1 WHERE count<20 RETURNING count`)
+    .bind(owner + ':guest-import:' + hour, (hour + 1) * 3600000).first();
+  if (!allowed) throw new GuestImportError('대화 가져오기 요청이 많습니다. 잠시 후 다시 시도해 주세요.', 429);
+  const title = messages[0].content.trim().replace(/\s+/g, ' ').slice(0, 80) || '로그인 전 대화';
+  try {
+    // D1 batches are transactional. A concurrent retry cannot add duplicate turns.
+    await sql.batch([
+      sql.prepare('INSERT INTO conversations (id,user_id,title,model,created_at,updated_at) VALUES (?,?,?,?,?,?)')
+        .bind(conversationId, owner, title, 'gpt-6.1-sol', now, now + messages.length),
+      ...messages.map((turn, index) => sql.prepare('INSERT INTO messages (id,conversation_id,role,content,model,created_at) VALUES (?,?,?,?,?,?)')
+        .bind(crypto.randomUUID(), conversationId, turn.role, turn.content, turn.role === 'assistant' ? 'gpt-6.1-sol' : null, now + index)),
+    ]);
+  } catch (cause) {
+    if (await existing()) return { conversationId, reused: true };
+    throw cause;
+  }
+  return { conversationId, reused: false };
+}

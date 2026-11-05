@@ -10,6 +10,8 @@ import { handleMedia } from '../../../lib/media-workspace';
 import { handleBrowser } from '../../../lib/browser-workspace';
 import { handleScheduledTasks, runDueScheduledTasks, type ScheduledTaskExecutor } from '../../../lib/scheduled-tasks';
 import { deleteWorkArtifacts, handleWorkArtifact, storeWorkArtifacts } from '../../../lib/work-artifacts';
+import { handleGuest } from '../../../lib/guest-chat';
+import { GuestImportError, importGuestConversation } from '../../../lib/guest-import';
 export const dynamic='force-dynamic';
 const json=(data:unknown,status=200)=>Response.json(data,{status,headers:{'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
 const uid=()=>crypto.randomUUID();
@@ -54,6 +56,10 @@ async function handle(req:Request,scheduledOwner?:string){
   const share=await db().prepare('SELECT title,snapshot,created_at FROM public_shares WHERE token=?').bind(path[1]).first<{title:string;snapshot:string;created_at:number}>();
   if(!share)return json({error:'This shared conversation is unavailable or has been revoked.'},404);
   return json({title:share.title,created_at:share.created_at,messages:JSON.parse(share.snapshot)});
+ }
+ if(path[0]==='guest'){
+  if(!env.DB)return json({error:'체험 서비스를 준비하지 못했습니다. 잠시 후 다시 시도해 주세요.',code:'DATABASE_NOT_READY'},503);
+  return await handleGuest(req,path,env.DB,env) ?? json({error:'Endpoint not found.'},404);
  }
  const user=await getChatGPTUser();
  if(path[0]==='bootstrap'&&req.method==='GET')return json({user:user?{name:user.fullName||user.email.split('@')[0],email:user.email}:null,beta:env.BETA_MODE==='true',models:env.BETA_MODE==='true'?MODELS.filter(m=>m.id==='gpt-6.1-sol'):MODELS,providers:Object.fromEntries(Object.entries(PROVIDERS).map(([p,v])=>[p,{configured:!!env[v.secret as keyof typeof env]}])),mediaModels:{image:env.OPENAI_IMAGE_MODEL||'gpt-image-2.5-flare',video:env.GEMINI_VIDEO_MODEL||'gemini-omni-1.1-flash',music:env.GEMINI_MUSIC_MODEL||'lyria-3-clip-preview'},capabilities:{...getWorkspaceCapabilities(env),drive:!!(env.GOOGLE_DRIVE_CLIENT_ID&&env.GOOGLE_DRIVE_PICKER_KEY&&env.GOOGLE_DRIVE_APP_ID),remoteBrowser:!!env.BROWSERLESS_API_TOKEN,scheduled:runnerReady(),codeExecution:env.BETA_MODE==='true'&&!!env.OPENAI_API_KEY&&env.WORK_CODE_EXECUTION_ENABLED!=='false'},isAdmin:!!user&&!!env.ADMIN_USER_ID&&user.userId===env.ADMIN_USER_ID});
@@ -135,6 +141,10 @@ async function handle(req:Request,scheduledOwner?:string){
   for(const file of owned)await env.BUCKET?.delete(file.key);
   await sql.batch([sql.prepare('DELETE FROM work_artifacts WHERE user_id=?').bind(owner),sql.prepare('DELETE FROM scheduled_tasks WHERE user_id=?').bind(owner),sql.prepare('DELETE FROM browser_sessions WHERE user_id=?').bind(owner),sql.prepare('DELETE FROM media_assets WHERE user_id=?').bind(owner),sql.prepare('DELETE FROM public_shares WHERE user_id=?').bind(owner),sql.prepare('DELETE FROM workspace_settings WHERE user_id=?').bind(owner),sql.prepare('DELETE FROM files WHERE user_id=?').bind(owner),sql.prepare('DELETE FROM messages WHERE conversation_id IN (SELECT id FROM conversations WHERE user_id=?)').bind(owner),sql.prepare('DELETE FROM conversations WHERE user_id=?').bind(owner)]);
   return json({ok:true,message:'대화와 파일을 삭제했습니다. 결제·사용량 원장은 정산을 위해 보존됩니다. ChatGPT 계정은 삭제되지 않습니다.'});
+ }
+ if(path.join('/')==='conversations/import-guest'&&req.method==='POST'){
+  const imported=await importGuestConversation(sql,owner,await req.json());
+  return json(imported,imported.reused?200:201);
  }
  if(path[0]==='conversations'){
   if(req.method==='GET'&&!path[1])return json((await sql.prepare('SELECT id,title,model,created_at,updated_at FROM conversations WHERE user_id=? ORDER BY updated_at DESC LIMIT 200').bind(owner).all()).results);
@@ -272,14 +282,14 @@ async function dispatch(req:Request){try{
   while(true){const part=await reader.read();if(part.done)break;bytes+=part.value.byteLength;if(bytes>maxBytes){void reader.cancel();return json({error:'Request is too large.'},413);}}
  }
  return await handle(req);
-}catch(e){if(e instanceof WorkspaceToolError)return json({error:e.message,code:e.code},e.status);if(e instanceof BillingError)return json({error:e.message},e.status);if(e instanceof SyntaxError)return json({error:'Invalid JSON request.'},400);return json({error:'The request could not be completed. Please retry.'},500);}}
+}catch(e){if(e instanceof GuestImportError)return json({error:e.message,code:'INVALID_GUEST_IMPORT'},e.status);if(e instanceof WorkspaceToolError)return json({error:e.message,code:e.code},e.status);if(e instanceof BillingError)return json({error:e.message},e.status);if(e instanceof SyntaxError)return json({error:'Invalid JSON request.'},400);return json({error:'The request could not be completed. Please retry.'},500);}}
 async function safe(req:Request){
  const requestId=uid(),started=Date.now();
  const response=await dispatch(req);
  response.headers.set('X-Request-ID',requestId);
  response.headers.set('X-Content-Type-Options','nosniff');
- response.headers.set('Cache-Control','no-store');
- if(response.status===429)response.headers.set('Retry-After','60');
+ response.headers.set('Cache-Control',response.headers.get('Cache-Control')?.includes('no-transform')?'no-store, no-transform':'no-store');
+ if(response.status===429&&!response.headers.has('Retry-After'))response.headers.set('Retry-After','60');
  // SignalBrief's request-context pattern: never log prompts, emails or keys.
  console.info(JSON.stringify({event:'api_request',requestId,method:req.method,status:response.status,durationMs:Date.now()-started}));
  return response;

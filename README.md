@@ -1,6 +1,8 @@
 # Open Prism
 
-Prism is an authenticated AI workspace running on **ChatGPT Sites, Cloudflare Workers, D1, and R2**, with Sign in with ChatGPT. The current free beta uses GPT-6.1 Sol for text. Provider integrations make real requests; missing connections, unsupported models, and exhausted allowances return explicit errors.
+Prism is an AI workspace running on **ChatGPT Sites, Cloudflare Workers, D1, and R2**, with a separate guest chat and Sign in with ChatGPT for the saved workspace. The current free beta uses GPT-6.1 Sol for text. Provider integrations make real requests; missing connections, unsupported models, and exhausted allowances return explicit errors.
+
+The November 5 guest-flow update separates the public landing/chat experience from the existing authenticated workspace. See [guest flow and authentication](docs/guest-flow.md) for the responsive states, API boundaries, guest allowances, and explicit transcript-import workflow.
 
 The November 2026 audit fixes add service adapters and correct the composer, navigation, and responsive layout. [Audit fixes and operations](docs/audit-fixes.md) is the current feature/configuration reference. [Earlier design notes](docs/gemini-design-implementation.md) and the implementation TXT bundles describe the earlier design delivery and are historical snapshots.
 
@@ -19,7 +21,7 @@ The November 2026 audit fixes add service adapters and correct the composer, nav
 | Google Drive | User-authorized Picker selection and real document export/upload. | Google OAuth client, restricted Picker API key, and Cloud project number. |
 | Notebook | Dedicated create/open/search/save/delete page and “save and attach”; private Markdown documents with selected text sources. | Sign-in, D1, and R2. |
 
-Personalization, memory, reusable skills, share snapshots/revocation, theme persistence, browser speech recognition, and print/install actions remain available where the browser/runtime supports them. Signed-out chat attempts retain the draft and show Korean sign-in guidance.
+Personalization, memory, reusable skills, share snapshots/revocation, theme persistence, browser speech recognition, and print/install actions remain available where the browser/runtime supports them. Guests have a separate limited text-chat endpoint, browser-tab transcript retention, and sign-in draft handoff. Guest headers do not expose PDF export; authenticated workspace controls retain their existing behavior.
 
 ## Runtime configuration
 
@@ -28,6 +30,7 @@ Personalization, memory, reusable skills, share snapshots/revocation, theme pers
 | `DB` | D1 database. Apply all migrations through `0005_media_and_browser.sql`. |
 | `BUCKET` | Private R2 storage for documents, notebooks, media, references, and generated files. |
 | `OPENAI_API_KEY` | Server secret for the beta text model, web search, Code Interpreter, and images; actual account/model access still applies. |
+| `GUEST_CHAT_ENABLED=false` | Optional kill switch for anonymous inference. Without this override, guest chat uses the existing key and shared beta lifetime allowance. |
 | `BETA_MODE=true`, `PAYMENTS_MODE=disabled` | Existing bounded beta configuration. Customer payments remain disabled. |
 | `BETA_USER_DAILY_LIMIT_MICROS` | Optional server-only approved daily allowance in micro-USD; default `200000` ($0.20). No runtime increase was made in this change. |
 | `GEMINI_API_KEY` | Optional server secret for Google video/music and other allowed Google models. |
@@ -60,6 +63,8 @@ node --test tests/integration.mjs
 node --test tests/provider-features.mjs
 node --test tests/scheduled-tasks.test.mjs
 node --test tests/browser-workspace.mjs
+node --test tests/guest-chat.test.mjs
+node --test tests/guest-routing.mjs
 pnpm build
 ```
 

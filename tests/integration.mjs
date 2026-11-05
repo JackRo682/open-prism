@@ -31,7 +31,7 @@ const env={DB:{prepare,async batch(items){sqlite.exec('BEGIN');try{const out=[];
 }};
 globalThis.__prismTest={env,getUser:async()=>user};
 await writeFile(new URL('context.mjs',dir),'export const env=globalThis.__prismTest.env; export const getChatGPTUser=globalThis.__prismTest.getUser;');
-const libraryModules=['models','provider','billing','beta','workspace-settings','workspace-tools','media-provider','media-workspace','browser-workspace','scheduled-tasks','schedule-time','work-artifacts'];
+const libraryModules=['models','provider','billing','beta','workspace-settings','workspace-tools','media-provider','media-workspace','browser-workspace','scheduled-tasks','schedule-time','work-artifacts','guest-chat','guest-import'];
 for(const [source,dest] of [...libraryModules.map(name=>['lib/'+name+'.ts',name+'.mjs']),['app/api/[...path]/route.ts','route.mjs']]){
  let code=await readFile(new URL('../'+source,import.meta.url),'utf8');
  code=code.replaceAll("'cloudflare:workers'","'./context.mjs'").replaceAll("'../../chatgpt-auth'","'./context.mjs'");
@@ -599,4 +599,41 @@ test('health probes check dependencies and every response has a request ID',asyn
  assert.equal((await call('health/ready')).status,200);
  const denied=await call('conversations');assert.equal(denied.status,401);assert.ok(denied.headers.get('X-Request-ID'));assert.equal(denied.headers.get('Cache-Control'),'no-store');
  delete env.OPENAI_API_KEY;
+});
+
+test('guest import requires authentication and rejects cross-origin writes',async()=>{
+ const before=user;user=null;
+ assert.equal((await call('conversations/import-guest','POST',{sessionId:crypto.randomUUID(),messages:[]})).status,401);
+ user={userId:'guest-import-owner',email:'import@example.test'};
+ assert.equal((await call('conversations/import-guest','POST',{}, {origin:'https://other.test'})).status,403);
+ user=before;
+});
+
+test('explicit guest import saves once, makes no provider request and isolates owners',async()=>{
+ await isolated('guest-import-owner',async owner=>{
+  let providerCalls=0;globalThis.fetch=async()=>{providerCalls++;throw new Error('No inference during an import');};
+  const body={sessionId:crypto.randomUUID(),messages:[{role:'user',content:'로그인 전에 작성한 질문'},{role:'assistant',content:'게스트 응답'}]};
+  const first=await call('conversations/import-guest','POST',body);assert.equal(first.status,201);
+  const saved=await first.json();const second=await call('conversations/import-guest','POST',body);assert.equal(second.status,200);
+  assert.equal((await second.json()).conversationId,saved.conversationId);
+  const stored=await(await call('conversations/'+saved.conversationId)).json();assert.equal(stored.messages.length,2);
+  assert.equal(stored.messages[0].content,body.messages[0].content);assert.equal(providerCalls,0);
+  user={userId:'another-import-owner',email:'other@example.test'};
+  assert.equal((await call('conversations/'+saved.conversationId)).status,404);
+  const other=await call('conversations/import-guest','POST',body);assert.equal(other.status,201);
+  const otherSaved=await other.json();assert.notEqual(otherSaved.conversationId,saved.conversationId);
+  await call('conversations/'+otherSaved.conversationId,'DELETE');
+  user={userId:owner,email:'import@example.test'};
+ });
+});
+
+test('guest import validates roles, content size and untrusted fields before storage',async()=>{
+ await isolated('guest-import-validation',async()=>{
+  const valid={sessionId:crypto.randomUUID(),messages:[{role:'user',content:'Question'},{role:'assistant',content:'Answer'}]};
+  for(const invalid of [null,{...valid,sessionId:'../other'},{...valid,owner:'someone-else'},{...valid,messages:[{role:'system',content:'Unsafe role'},valid.messages[1]]},{...valid,messages:[valid.messages[0]]},{...valid,messages:[valid.messages[0],{role:'assistant',content:''}]},{...valid,messages:[{...valid.messages[0],fileId:'private-file'},valid.messages[1]]}]) {
+   assert.equal((await call('conversations/import-guest','POST',invalid)).status,400);
+  }
+  assert.equal((await call('conversations/import-guest','POST',{...valid,messages:[valid.messages[0],{role:'assistant',content:'x'.repeat(32001)}]})).status,413);
+  assert.equal((await(await call('conversations')).json()).length,0);
+ });
 });

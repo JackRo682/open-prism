@@ -3,6 +3,8 @@ import { cookies } from 'next/headers';
 import './globals.css';
 import './reference-shell.css';
 import './workspace-details.css';
+import './guest.css';
+import './public.css';
 import '../components/workspace/settings.css';
 import '../components/workspace/composer-modes.css';
 import '../components/workspace/browser-settings.css';
