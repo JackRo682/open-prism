@@ -1,0 +1,11 @@
+# Review these together: a lockfile or workflow change can change executed code.
+/.github/ @JackRo682
+/.gitleaks.toml @JackRo682
+/package.json @JackRo682
+/pnpm-lock.yaml @JackRo682
+/pnpm-workspace.yaml @JackRo682
+/scripts/security-*.mjs @JackRo682
+/scripts/install-security-tools.sh @JackRo682
+/lib/auth/ @JackRo682
+/app/auth.ts @JackRo682
+/lib/guest-chat.ts @JackRo682

@@ -4,6 +4,10 @@ import { BillingError } from './billing';
 // Failed/uncertain requests retain their reservation; deleting chats cannot reset it.
 export const BETA_OUTPUT = 1024;
 export const BETA_INPUT_BYTES = 16000;
+// Preserve the total lifetime ceiling while reserving separate portions for guests and accounts.
+export const BETA_TOTAL_BUDGET_MICROS = 8_000_000;
+export const BETA_ACCOUNT_BUDGET_MICROS = 6_000_000;
+export const BETA_GUEST_BUDGET_MICROS = 2_000_000;
 export function betaCost(input: number, output: number) {
   return input * 2 + output * 10;
 }
@@ -16,9 +20,10 @@ export async function reserveBeta(sql: D1Database, owner: string, id: string, in
     SELECT ?,?,'gpt-6.1-sol','openai','pending',?,'beta:v1',?
     WHERE (SELECT COUNT(*) FROM usage WHERE user_id=? AND rate_snapshot LIKE 'beta:%' AND created_at>=?) < 20
     AND (SELECT COALESCE(SUM(reserved_amount),0) FROM usage WHERE user_id=? AND rate_snapshot LIKE 'beta:%' AND created_at>=?) + ? <= ?
+    AND (SELECT COALESCE(SUM(reserved_amount),0) FROM usage WHERE rate_snapshot LIKE 'beta:%' AND rate_snapshot NOT LIKE 'beta:guest:%') + ? <= 6000000
     AND (SELECT COALESCE(SUM(reserved_amount),0) FROM usage WHERE rate_snapshot LIKE 'beta:%') + ? <= 8000000
     AND (SELECT COUNT(*) FROM usage WHERE user_id=? AND rate_snapshot LIKE 'beta:%' AND status='pending') < 2
-    RETURNING id`).bind(id, owner, now, amount, owner, day, owner, day, amount, dailyLimit, amount, owner).first();
+    RETURNING id`).bind(id, owner, now, amount, owner, day, owner, day, amount, dailyLimit, amount, amount, owner).first();
   if (!row) throw new BillingError('Beta allowance reached or two responses are already running. Try again later. No payment is required.', 429);
   return amount;
 }
@@ -33,9 +38,10 @@ export async function reserveMedia(sql: D1Database, owner: string, id: string, m
     SELECT ?,?,?,?,'pending',?,'beta:media:v1',?
     WHERE (SELECT COUNT(*) FROM usage WHERE user_id=? AND rate_snapshot LIKE 'beta:%' AND created_at>=?) < 20
     AND (SELECT COALESCE(SUM(reserved_amount),0) FROM usage WHERE user_id=? AND rate_snapshot LIKE 'beta:%' AND created_at>=?) + ? <= ?
+    AND (SELECT COALESCE(SUM(reserved_amount),0) FROM usage WHERE rate_snapshot LIKE 'beta:%' AND rate_snapshot NOT LIKE 'beta:guest:%') + ? <= 6000000
     AND (SELECT COALESCE(SUM(reserved_amount),0) FROM usage WHERE rate_snapshot LIKE 'beta:%') + ? <= 8000000
     AND (SELECT COUNT(*) FROM usage WHERE user_id=? AND rate_snapshot LIKE 'beta:%' AND status='pending') < 2
-    RETURNING id`).bind(id, owner, model, provider, now, amount, owner, day, owner, day, amount, dailyLimit, amount, owner).first();
+    RETURNING id`).bind(id, owner, model, provider, now, amount, owner, day, owner, day, amount, dailyLimit, amount, amount, owner).first();
   if (!row) throw new BillingError(amount > dailyLimit
     ? '이 미디어 작업은 현재 무료 체험의 하루 한도를 초과합니다. 운영자가 미디어 이용 한도를 설정해야 합니다.'
     : '오늘의 이용 한도에 도달했거나 두 작업이 진행 중입니다. 잠시 후 다시 시도해주세요.', 429);

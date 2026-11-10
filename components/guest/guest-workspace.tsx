@@ -6,8 +6,10 @@ import { useWorkspaceTheme, type ThemePreference } from '../workspace/theme';
 import { readGuestSession, writeGuestSession, type GuestMessage, type GuestSession } from '../../lib/guest-session';
 import GuestMarkdown from './guest-markdown';
 import GuestDialog from './guest-dialog';
+import { loadGuestChallenge, solveGuestChallenge, type GuestChallenge } from '../../lib/guest-proof';
 
 type Bootstrap = {
+  challenge?: GuestChallenge;
   available: boolean;
   model: { id: string; name: string; provider: string };
   remaining: number;
@@ -63,6 +65,7 @@ export default function GuestWorkspace({ signInHref = '/signin-with-chatgpt?retu
   const [bootLoading, setBootLoading] = useState(true);
   const [bootError, setBootError] = useState('');
   const [streaming, setStreaming] = useState(false);
+  const [verifying, setVerifying] = useState(false);
   const [popup, setPopup] = useState<Popup>(null);
   const [modal, setModal] = useState<Modal>(null);
   const [drawer, setDrawer] = useState(false);
@@ -76,6 +79,7 @@ export default function GuestWorkspace({ signInHref = '/signin-with-chatgpt?retu
   const [listening, setListening] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const challengeContainerRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const drawerRef = useRef<HTMLElement>(null);
   const popupTrigger = useRef<HTMLElement | null>(null);
@@ -255,7 +259,7 @@ export default function GuestWorkspace({ signInHref = '/signin-with-chatgpt?retu
     abortRef.current?.abort();
     abortRef.current = null;
     streamingRef.current = false;
-    setStreaming(false);
+    setStreaming(false); setVerifying(false);
     setMessages(current => current.map(message => message.status === 'streaming' ? { ...message, status: 'stopped' } : message));
     setAnnouncement('답변 생성을 중지했습니다.');
   }
@@ -284,13 +288,23 @@ export default function GuestWorkspace({ signInHref = '/signin-with-chatgpt?retu
     let content = '';
     let done = false;
     let timedOut = false;
-    const timer = setTimeout(() => { timedOut = true; controller.abort(); }, 125000);
+    let timer = setTimeout(() => { timedOut = true; controller.abort(); }, 125000);
     const current = () => mountedRef.current && epochRef.current === epoch;
     const update = (status: GuestMessage['status'], error?: string) => {
       if (current()) setMessages(previous => previous.map(message => message.id === answerId ? { ...message, content, status, ...(error ? { error } : {}) } : message));
     };
     try {
-      const response = await fetch('/api/guest/chat', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' }, signal: controller.signal, body: JSON.stringify({ requestId, prompt, history }) });
+      setVerifying(true);
+      const { response: challengeResponse, value: challengeValue } = await loadGuestChallenge(controller.signal);
+      const fresh = challengeValue as Bootstrap;
+      if (current() && typeof fresh.remaining === 'number') setBootstrap(fresh);
+      if (!challengeResponse.ok || !fresh.available || !fresh.challenge) throw new Error(fresh.error || '보안 확인을 시작하지 못했습니다. 다시 시도해주세요.');
+      const challengeProof = await solveGuestChallenge(fresh.challenge, controller.signal, challengeContainerRef.current);
+      if (!current()) return;
+      setVerifying(false);
+      clearTimeout(timer);
+      timer = setTimeout(() => { timedOut = true; controller.abort(); }, 125000);
+      const response = await fetch('/api/guest/chat', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' }, signal: controller.signal, body: JSON.stringify({ requestId, prompt, history, ...challengeProof }) });
       if (!response.ok) {
         const failure = await response.json().catch(() => ({})) as { error?: string; code?: string; remaining?: number };
         if (current() && typeof failure.remaining === 'number') setBootstrap(previous => previous ? { ...previous, remaining: failure.remaining! } : previous);
@@ -332,7 +346,7 @@ export default function GuestWorkspace({ signInHref = '/signin-with-chatgpt?retu
     } finally {
       clearTimeout(timer);
       controller.abort();
-      if (current()) { streamingRef.current = false; setStreaming(false); abortRef.current = null; }
+      if (current()) { streamingRef.current = false; setStreaming(false); setVerifying(false); abortRef.current = null; }
     }
   }
 
@@ -432,6 +446,8 @@ export default function GuestWorkspace({ signInHref = '/signin-with-chatgpt?retu
         {hasInteracted && !streaming && <aside className="pg-signin-reminder"><p>대화를 저장하고 더 많은 기능을<br className="pg-reminder-break"/> 사용하려면 로그인하세요.</p>{signIn('pg-reminder-signin')}</aside>}
         {(bootError || (bootstrap?.available && bootstrap.remaining <= 0)) && <div className="pg-service-notice" role="status"><span>{bootError || '오늘의 체험 횟수를 모두 사용했습니다.'}</span>{bootError ? <button type="button" disabled={bootLoading} onClick={() => void loadBootstrap()}>{bootLoading ? '연결 중…' : '다시 연결'}</button> : signIn('', '로그인')}</div>}
         {editing !== null && <div className="pg-edit-notice"><span>질문 수정 · 전송하면 이후 대화가 새로 생성됩니다.</span><button type="button" onClick={() => { setEditing(null); setDraft(''); }} aria-label="수정 취소"><X size={16}/></button></div>}
+        <div ref={challengeContainerRef} className="pg-security-check" aria-label="보안 확인"/>
+        {verifying && <p role="status" className="pg-disclaimer">보안 확인 중입니다.</p>}
         {composerError && <div className="pg-composer-error" role="alert">{composerError}</div>}
         <form className={`pg-composer ${listening ? 'pg-is-listening' : ''}`} onSubmit={event => { event.preventDefault(); submit(); }}>
           <div className="pg-tools-anchor"><button type="button" className="pg-icon-button pg-add-button" data-popup-trigger aria-label="도구 및 파일" aria-haspopup="menu" aria-expanded={popup === 'tools'} onClick={event => togglePopup('tools', event.currentTarget)}><Plus size={24}/></button>{popup === 'tools' && <div className="pg-popover pg-tools-menu" role="menu" aria-label="도구 및 파일"><div className="pg-menu-heading">로그인하여 사용</div><a href={signInHref} target="_top" role="menuitem" onClick={rememberSignIn}><FilePlus2 size={18}/><span>파일 추가</span><LockKeyhole size={14}/></a><div className="pg-menu-divider"/><a href={signInHref} target="_top" role="menuitem" onClick={rememberSignIn}><ImagePlus size={18}/><span>이미지 생성</span><LockKeyhole size={14}/></a><a href={signInHref} target="_top" role="menuitem" onClick={rememberSignIn}><SquarePen size={18}/><span>문서 작업</span><LockKeyhole size={14}/></a><a href={signInHref} target="_top" role="menuitem" onClick={rememberSignIn}><Sparkles size={18}/><span>워크스페이스 도구</span><LockKeyhole size={14}/></a>{signIn('pg-menu-signin', '로그인하여 계속하기', true)}</div>}</div>

@@ -1,3 +1,4 @@
+import { findOwnedResource } from '../../../lib/authorization';
 import { env } from 'cloudflare:workers';
 import { getChatGPTUser } from '../../chatgpt-auth';
 import { MODELS, PROVIDERS, findModel, Provider } from '../../../lib/models';
@@ -97,9 +98,9 @@ async function handle(req:Request,scheduledOwner?:string){
   if(path.length===1&&req.method==='POST'){
    const body=await req.json() as {conversationId?:unknown}|null;
    if(!body||typeof body.conversationId!=='string'||body.conversationId.length>100)return json({error:'A valid conversation is required.'},400);
-   const chat=await sql.prepare('SELECT id,title FROM conversations WHERE id=? AND user_id=?').bind(body.conversationId,owner).first<{id:string;title:string}>();
+   const chat=await findOwnedResource<{id:string;title:string}>(sql,'conversation',body.conversationId,owner);
    if(!chat)return json({error:'Conversation not found.'},404);
-   const messages=(await sql.prepare('SELECT role,content,model,created_at FROM messages WHERE conversation_id=? ORDER BY created_at,rowid').bind(chat.id).all<{role:string;content:string;model:string|null;created_at:number}>()).results;
+   const messages=(await sql.prepare('SELECT m.role,m.content,m.model,m.created_at FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE c.id=? AND c.user_id=? ORDER BY m.created_at,m.rowid').bind(chat.id,owner).all<{role:string;content:string;model:string|null;created_at:number}>()).results;
    if(!messages.length)return json({error:'Send a message before sharing this conversation.'},400);
    const snapshot=JSON.stringify(messages.map(message=>({...message,content:publicMessageContent(message.content)})));
    if(new TextEncoder().encode(snapshot).length>1000000)return json({error:'This conversation is too large to share. Create a shorter conversation.'},400);
@@ -109,7 +110,7 @@ async function handle(req:Request,scheduledOwner?:string){
    return json({id,token,url:new URL('/share/'+token,req.url).href},201);
   }
   if(path.length===2&&req.method==='DELETE'){
-   const share=await sql.prepare('SELECT id FROM public_shares WHERE id=? AND user_id=?').bind(path[1],owner).first();
+   const share=await findOwnedResource(sql,'share',path[1],owner);
    if(!share)return json({error:'Shared conversation not found.'},404);
    await sql.prepare('DELETE FROM public_shares WHERE id=? AND user_id=?').bind(path[1],owner).run();
    return json({ok:true});
@@ -153,12 +154,12 @@ async function handle(req:Request,scheduledOwner?:string){
  if(path[0]==='conversations'){
   if(req.method==='GET'&&!path[1])return json((await sql.prepare('SELECT id,title,model,created_at,updated_at FROM conversations WHERE user_id=? ORDER BY updated_at DESC LIMIT 200').bind(owner).all()).results);
   const id=path[1];if(!id)return json({error:'Conversation ID required.'},400);
-  const chat=await sql.prepare('SELECT * FROM conversations WHERE id=? AND user_id=?').bind(id,owner).first();if(!chat)return json({error:'Conversation not found.'},404);
-  if(req.method==='GET')return json({conversation:chat,messages:(await sql.prepare('SELECT id,role,content,model,created_at FROM messages WHERE conversation_id=? ORDER BY created_at,rowid').bind(id).all()).results});
+  const chat=await findOwnedResource(sql,'conversation',id,owner);if(!chat)return json({error:'Conversation not found.'},404);
+  if(req.method==='GET')return json({conversation:chat,messages:(await sql.prepare('SELECT m.id,m.role,m.content,m.model,m.created_at FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE c.id=? AND c.user_id=? ORDER BY m.created_at,m.rowid').bind(id,owner).all()).results});
   if(req.method==='DELETE'){
    const artifacts=(await sql.prepare('SELECT id FROM work_artifacts WHERE conversation_id=? AND user_id=?').bind(id,owner).all<{id:string}>()).results;
    await deleteWorkArtifacts(env,sql,owner,artifacts.map(file=>file.id));
-   await sql.batch([sql.prepare('UPDATE scheduled_tasks SET last_conversation_id=NULL WHERE last_conversation_id=? AND user_id=?').bind(id,owner),sql.prepare('DELETE FROM messages WHERE conversation_id=?').bind(id),sql.prepare('DELETE FROM conversations WHERE id=? AND user_id=?').bind(id,owner)]);return json({ok:true});
+   await sql.batch([sql.prepare('UPDATE scheduled_tasks SET last_conversation_id=NULL WHERE last_conversation_id=? AND user_id=?').bind(id,owner),sql.prepare('DELETE FROM messages WHERE conversation_id=? AND EXISTS (SELECT 1 FROM conversations c WHERE c.id=messages.conversation_id AND c.user_id=?)').bind(id,owner),sql.prepare('DELETE FROM conversations WHERE id=? AND user_id=?').bind(id,owner)]);return json({ok:true});
   }
   if(req.method==='PATCH'){const b:any=await req.json();if(typeof b.title!=='string'||!b.title.trim()||b.title.length>100)return json({error:'Use a title between 1 and 100 characters.'},400);await sql.prepare('UPDATE conversations SET title=?,updated_at=? WHERE id=? AND user_id=?').bind(b.title.trim(),Date.now(),id,owner).run();return json({ok:true});}
  }
@@ -182,7 +183,7 @@ async function handle(req:Request,scheduledOwner?:string){
    }catch(e){await env.BUCKET.delete(key);throw e;}
    return json({id,name,size:file.size});
   }
-  if(path.length===2){const file:any=await sql.prepare('SELECT * FROM files WHERE id=? AND user_id=?').bind(path[1],owner).first();if(!file||!isOwnedObjectKey(file.key,owner))return json({error:'File not found.'},404);
+  if(path.length===2){const file:any=await findOwnedResource(sql,'file',path[1],owner);if(!file||!isOwnedObjectKey(file.key,owner))return json({error:'File not found.'},404);
    if(req.method==='DELETE'){if(env.BUCKET)await env.BUCKET.delete(file.key);await sql.prepare('DELETE FROM files WHERE id=? AND user_id=?').bind(path[1],owner).run();return json({ok:true});}
    if(req.method==='GET'){const object=await env.BUCKET?.get(file.key);if(!object)return json({error:'File content not found.'},404);if(object.size>MAX_TEXT_FILE_BYTES)return json({error:'Stored file exceeds the supported size.'},413);return new Response(await object.text(),{headers:{...PRIVATE_FILE_HEADERS,'Content-Type':'text/plain; charset=utf-8','Content-Disposition':attachmentDisposition(file.name)}});}
   }
@@ -218,13 +219,13 @@ async function handle(req:Request,scheduledOwner?:string){
   await sql.prepare('DELETE FROM rate_limits WHERE expires_at<?').bind(now).run();
   const limit:any=await sql.prepare('INSERT INTO rate_limits (key,count,expires_at) VALUES (?,1,?) ON CONFLICT(key) DO UPDATE SET count=count+1 RETURNING count').bind(bucket,now+120000).first();if(limit.count>20)return json({error:'Too many requests. Wait a minute and try again.'},429);
   let conversationId=body.conversationId||uid();if(typeof conversationId!=='string'||conversationId.length>100)return json({error:'Invalid conversation.'},400);
-  if(body.conversationId&&!await sql.prepare('SELECT id FROM conversations WHERE id=? AND user_id=?').bind(conversationId,owner).first())return json({error:'Conversation not found.'},404);
+  if(body.conversationId&&!await findOwnedResource(sql,'conversation',conversationId,owner))return json({error:'Conversation not found.'},404);
   const lockKey='chat:'+conversationId;
   const lock=await sql.prepare('INSERT INTO rate_limits (key,count,expires_at) VALUES (?,1,?) ON CONFLICT(key) DO UPDATE SET count=1,expires_at=excluded.expires_at WHERE expires_at<? RETURNING key').bind(lockKey,now+250000,now).first();if(!lock)return json({error:'This conversation already has a response in progress.'},409);
   let prompt=body.prompt.trim(),reservation=0,requestId=uid(),providerStarted=false;
   try{
-   for(const id of body.fileIds||[]){const file:any=await sql.prepare('SELECT * FROM files WHERE id=? AND user_id=?').bind(id,owner).first();if(!file||!isOwnedObjectKey(file.key,owner))throw new Error('An attached file is no longer available.');const object=await env.BUCKET?.get(file.key);if(!object||object.size>MAX_TEXT_FILE_BYTES)throw new Error('An attached file could not be read.');prompt+='\n\n<attached_document name='+JSON.stringify(file.name)+'>\n'+await object.text()+'\n</attached_document>';}
-   const historyRows=(await sql.prepare('SELECT role,content,created_at FROM messages WHERE conversation_id=? ORDER BY created_at DESC,rowid DESC LIMIT 40').bind(conversationId).all<Turn & {created_at:number}>()).results.reverse();
+   for(const id of body.fileIds||[]){const file:any=await findOwnedResource(sql,'file',id,owner);if(!file||!isOwnedObjectKey(file.key,owner))throw new Error('An attached file is no longer available.');const object=await env.BUCKET?.get(file.key);if(!object||object.size>MAX_TEXT_FILE_BYTES)throw new Error('An attached file could not be read.');prompt+='\n\n<attached_document name='+JSON.stringify(file.name)+'>\n'+await object.text()+'\n</attached_document>';}
+   const historyRows=(await sql.prepare('SELECT m.role,m.content,m.created_at FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE c.id=? AND c.user_id=? ORDER BY m.created_at DESC,m.rowid DESC LIMIT 40').bind(conversationId,owner).all<Turn & {created_at:number}>()).results.reverse();
    const history:Turn[]=historyRows.map(({role,content})=>({role,content}));
    // The conversation lock serializes turns. Keep timestamps strictly increasing
    // even when a provider finishes within one millisecond or the clock moves back.

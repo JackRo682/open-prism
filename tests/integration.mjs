@@ -31,7 +31,7 @@ const env={DB:{prepare,async batch(items){sqlite.exec('BEGIN');try{const out=[];
 }};
 globalThis.__prismTest={env,getUser:async()=>user};
 await writeFile(new URL('context.mjs',dir),'export const env=globalThis.__prismTest.env; export const getChatGPTUser=globalThis.__prismTest.getUser;');
-const libraryModules=['models','provider','billing','beta','workspace-settings','workspace-tools','media-provider','media-workspace','browser-workspace','scheduled-tasks','schedule-time','work-artifacts','guest-chat','guest-import','request-security','upload-security','api-resource-guards'];
+const libraryModules=['authorization','models','provider','billing','beta','workspace-settings','workspace-tools','media-provider','media-workspace','browser-workspace','scheduled-tasks','schedule-time','work-artifacts','guest-chat','guest-import','request-security','upload-security','api-resource-guards'];
 for(const [source,dest] of [...libraryModules.map(name=>['lib/'+name+'.ts',name+'.mjs']),['app/api/[...path]/route.ts','route.mjs']]){
  let code=await readFile(new URL('../'+source,import.meta.url),'utf8');
  code=code.replaceAll("'cloudflare:workers'","'./context.mjs'").replaceAll("'../../chatgpt-auth'","'./context.mjs'");

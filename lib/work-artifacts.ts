@@ -1,3 +1,4 @@
+import { findOwnedResource } from './authorization';
 import { BillingError } from './billing';
 import { safeDownloadName, attachmentDisposition, isOwnedObjectKey, PRIVATE_FILE_HEADERS } from './upload-security';
 
@@ -7,7 +8,7 @@ const MAX_FILE_BYTES=5*1024*1024;
 
 export async function deleteWorkArtifacts(env:Cloudflare.Env,sql:D1Database,owner:string,ids:string[]){
  for(const id of ids){
-  const file=await sql.prepare('SELECT object_key FROM work_artifacts WHERE id=? AND user_id=?').bind(id,owner).first<{object_key:string}>();
+  const file=await findOwnedResource<{object_key:string}>(sql,'artifact',id,owner);
   if(!file)continue;
   if(!isOwnedObjectKey(file.object_key,owner,'artifacts'))throw new BillingError('파일을 찾을 수 없습니다.',404);
   if(!env.BUCKET)throw new Error('생성 파일 저장 서비스를 사용할 수 없습니다.');
@@ -53,7 +54,7 @@ export async function storeWorkArtifacts(env:Cloudflare.Env,sql:D1Database,owner
 export async function handleWorkArtifact(req:Request,path:string[],sql:D1Database,owner:string,env:Cloudflare.Env):Promise<Response|null>{
  if(path[0]!=='artifacts')return null;
  if(req.method!=='GET'||path.length!==2)return Response.json({error:'파일 경로를 찾을 수 없습니다.'},{status:404});
- const file=await sql.prepare('SELECT * FROM work_artifacts WHERE id=? AND user_id=?').bind(path[1],owner).first<{object_key:string;name:string;size:number}>();
+ const file=await findOwnedResource<{object_key:string;name:string;size:number}>(sql,'artifact',path[1],owner);
  if(!file||!isOwnedObjectKey(file.object_key,owner,'artifacts'))throw new BillingError('파일을 찾을 수 없습니다.',404);
  const object=await env.BUCKET?.get(file.object_key);if(!object)throw new BillingError('파일 내용을 찾을 수 없습니다.',404);
  return new Response(object.body,{headers:{...PRIVATE_FILE_HEADERS,'Content-Type':'application/octet-stream','Content-Length':String(file.size),

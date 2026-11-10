@@ -1,3 +1,4 @@
+import { findOwnedResource } from './authorization';
 import { findModel } from './models';
 import { isTimeZone, nextScheduledAt, type ScheduleRecurrence } from './schedule-time';
 
@@ -27,7 +28,7 @@ function publicTask(task: StoredTask): ScheduledTask {
 }
 
 async function ownedTask(sql: D1Database, owner: string, id: string) {
-  const task = await sql.prepare('SELECT * FROM scheduled_tasks WHERE id=? AND user_id=?').bind(id, owner).first<StoredTask>();
+  const task = await findOwnedResource<StoredTask>(sql, 'task', id, owner);
   if (!task) throw new ScheduledTaskError('예약된 작업을 찾을 수 없습니다.', 404, 'TASK_NOT_FOUND');
   return task;
 }

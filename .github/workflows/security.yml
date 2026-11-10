@@ -1,0 +1,76 @@
+name: Security checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: '19 22 * * 0'
+
+# Untrusted pull requests never receive a deployment token or production secret.
+# Do not convert this workflow to pull_request_target or workflow_run.
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  security:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      CI: 'true'
+      WRANGLER_SEND_METRICS: 'false'
+      CLOUDFLARE_CF_FETCH_ENABLED: 'false'
+    steps:
+      - name: Check out the exact source and complete available history
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.3.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Use the tested Node release
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24.22.1'
+
+      - name: Install the checksum-verified secret scanner
+        run: bash scripts/install-security-tools.sh
+
+      - name: Scan history and current source before dependency execution
+        run: node scripts/security-secrets.mjs
+
+      - name: Install the pinned package manager
+        run: npm install --global pnpm@11.25.0 --ignore-scripts --no-audit --no-fund
+
+      - name: Install the frozen lockfile with the reviewed build-script allowlist
+        run: pnpm install --frozen-lockfile
+
+      - name: Audit production and build dependencies
+        run: pnpm run audit:security
+
+      - name: Generate the resolved-lockfile CycloneDX inventory
+        if: ${{ !cancelled() }}
+        run: pnpm run security:sbom
+
+      - name: Check types and authorization regressions
+        run: pnpm run check:types && pnpm run test:security
+
+      - name: Build without production credentials
+        run: pnpm run build
+
+      - name: Scan browser and Worker build artifacts
+        run: node scripts/security-secrets.mjs --artifacts-only
+
+      - name: Retain audit evidence and the SBOM
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: security-evidence-${{ github.sha }}
+          path: .sites-runtime/security/reports/
+          retention-days: 14
+          if-no-files-found: error
+          include-hidden-files: true
