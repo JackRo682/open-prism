@@ -1,3 +1,4 @@
+import { acquireRequestLease, releaseRequestLease } from './request-lease';
 export type BrowserEnvironment = {
   BROWSERLESS_API_TOKEN?: string;
   BROWSERLESS_ENDPOINT?: string;
@@ -333,9 +334,8 @@ export async function handleBrowser(req: Request, path: string[], sql: D1Databas
     if (env.BROWSERLESS_EGRESS_POLICY_VERIFIED !== 'true') throw new BrowserRequestError('원격 브라우저의 네트워크 보호 설정을 확인한 뒤 사용할 수 있습니다.', 503, 'BROWSER_NETWORK_POLICY_REQUIRED');
     const endpoint = browserlessEndpoint(env);
     endpoint.searchParams.set('token', env.BROWSERLESS_API_TOKEN);
-    const now = Date.now(), lockKey = `browser:active:${owner}`, lockExpires = now + 45000;
-    const lock = await sql.prepare('INSERT INTO rate_limits (key,count,expires_at) VALUES (?,1,?) ON CONFLICT(key) DO UPDATE SET count=1,expires_at=excluded.expires_at WHERE expires_at<? RETURNING key')
-      .bind(lockKey, lockExpires, now).first();
+    const now = Date.now(), lockKey = `browser:active:${owner}`;
+    const lock = await acquireRequestLease(sql, lockKey, 45000, now);
     if (!lock) throw new BrowserRequestError('열고 있는 원격 페이지가 있습니다. 완료 후 다시 시도해 주세요.', 409, 'BROWSER_BUSY');
     try {
       const count = await sql.prepare('SELECT COUNT(*) AS n FROM browser_sessions WHERE user_id=?').bind(owner).first<{ n: number }>();
@@ -362,7 +362,7 @@ export async function handleBrowser(req: Request, path: string[], sql: D1Databas
         .bind(id, owner, capture.url, capture.title, content, created_at).run();
       return json({ id, ...capture, created_at }, 201);
     } finally {
-      await sql.prepare('DELETE FROM rate_limits WHERE key=? AND expires_at=?').bind(lockKey, lockExpires).run();
+      await releaseRequestLease(sql, lock);
     }
   } catch (error) {
     if (error instanceof BrowserRequestError) return json({ error: error.message, code: error.code }, error.status);

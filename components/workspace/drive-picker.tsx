@@ -2,6 +2,8 @@
 
 import { clearDriveTokenResponse, DriveAccessSession, DRIVE_SCOPE, DRIVE_SELECTABLE_MIME_TYPES, selectedDriveFile, type DriveTokenResponse } from '../../lib/drive-client';
 
+import './integrations.css';
+
 import { useEffect, useRef, useState } from 'react';
 import { Dialog } from 'radix-ui';
 import { AlertCircle, ArrowRight, Cloud, LoaderCircle, X } from 'lucide-react';

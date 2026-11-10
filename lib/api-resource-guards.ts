@@ -77,10 +77,10 @@ const readiness = new WeakMap<D1Database, Probe>();
 /** Cache and coalesce the anonymous readiness probe. Timed-out D1 operations
  * stay in flight until they actually settle, so retries cannot pile up a new
  * batch each time the response deadline expires. No user data is cached. */
-export async function checkReadiness(env: Pick<Cloudflare.Env, 'DB' | 'BUCKET' | 'OPENAI_API_KEY'>, timeoutMs = 3000): Promise<Readiness> {
+export async function checkReadiness(env: Pick<Cloudflare.Env, 'DB' | 'BUCKET' | 'GEMINI_API_KEY'>, timeoutMs = 3000): Promise<Readiness> {
   if (!env.DB) return { status: 'unavailable', code: 'DATABASE_NOT_READY' };
   if (!env.BUCKET) return { status: 'unavailable', code: 'STORAGE_NOT_READY' };
-  if (!env.OPENAI_API_KEY) return { status: 'unavailable', code: 'PROVIDER_NOT_READY' };
+  if (!env.GEMINI_API_KEY) return { status: 'unavailable', code: 'PROVIDER_NOT_READY' };
   const sql = env.DB, now = Date.now();
   let entry = readiness.get(sql);
   if (!entry) { entry = { until: 0 }; readiness.set(sql, entry); }
@@ -89,6 +89,7 @@ export async function checkReadiness(env: Pick<Cloudflare.Env, 'DB' | 'BUCKET' |
     const current = entry;
     current.pending = Promise.resolve().then(() => sql.batch([
       'usage', 'scheduled_tasks', 'media_assets', 'browser_sessions', 'work_artifacts',
+      'chat_operations', 'conversation_reports', 'conversation_revisions', 'security_alerts', 'account_deletion_jobs',
     ].map(table => sql.prepare(`SELECT id FROM ${table} LIMIT 1`)))).then(
       (): Readiness => ({ status: 'ready', service: 'open-prism' }),
       (): Readiness => ({ status: 'unavailable', code: 'DATABASE_NOT_READY' }),

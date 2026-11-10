@@ -1,3 +1,15 @@
+/** Browser-session APIs do not accept ambient credentials from another origin.
+ * Service-to-service routes authenticate independently in their own handlers. */
+export function sameOriginMutation(request: Request): boolean {
+  const origin = request.headers.get('origin');
+  const site = request.headers.get('sec-fetch-site');
+  // Missing Fetch Metadata is supported for older browsers only because a
+  // valid Origin is still mandatory. `none` describes browser navigation,
+  // not an authenticated API/form mutation; unknown values fail closed.
+  return origin === new URL(request.url).origin
+    && (site === null || site === 'same-origin');
+}
+
 export class RequestSecurityError extends Error {
   constructor(message: string, public status: number, public code: string) { super(message); }
 }
@@ -46,7 +58,7 @@ export async function boundedApiRequest(request: Request, timeoutMs = 30000): Pr
     rejectBody(new RequestSecurityError('JSON requests must use UTF-8.', 415, 'UNSUPPORTED_CHARSET'));
   }
 
-  const reader = request.body.getReader(), chunks: Uint8Array[] = [];
+  const reader = request.body.getReader(), buffer = new Uint8Array(limit);
   let size = 0;
   let stop!: (error: RequestSecurityError) => void;
   const interrupted = new Promise<never>((_resolve, reject) => { stop = reject; });
@@ -65,13 +77,11 @@ export async function boundedApiRequest(request: Request, timeoutMs = 30000): Pr
       if (part.done) break;
       size += part.value.byteLength;
       if (size > limit) throw new RequestSecurityError('Request is too large.', 413, 'REQUEST_TOO_LARGE');
-      chunks.push(part.value);
+      buffer.set(part.value, size - part.value.byteLength);
     }
     if (request.signal.aborted) throw new RequestSecurityError('Request was cancelled.', 408, 'REQUEST_ABORTED');
     stage = 'copy';
-    const bytes = new Uint8Array(size);
-    let offset = 0;
-    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+    const bytes = buffer.subarray(0, size);
     stage = 'decode';
     if (!multipart) {
       try { new TextDecoder('utf-8', { fatal: true }).decode(bytes); }

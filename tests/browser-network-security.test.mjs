@@ -8,9 +8,10 @@ import ts from 'typescript';
 const output = new URL('../.sites-runtime/browser-network-tests/', import.meta.url);
 await mkdir(output, { recursive: true });
 const source = await readFile(new URL('../lib/browser-workspace.ts', import.meta.url), 'utf8');
-await writeFile(new URL('browser.mjs', output), ts.transpileModule(source, {
+await writeFile(new URL('browser.mjs', output), ts.transpileModule(source.replace("'./request-lease'", "'./request-lease.mjs'"), {
   compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
 }).outputText);
+await writeFile(new URL('request-lease.mjs', output), ts.transpileModule(await readFile(new URL('../lib/request-lease.ts', import.meta.url), 'utf8'), {compilerOptions:{module:ts.ModuleKind.ESNext,target:ts.ScriptTarget.ES2022}}).outputText);
 const { isPublicBrowserUrl, isPublicBrowserAddress, createBrowserDnsPolicy, BROWSER_CAPTURE_PROGRAM } = await import(new URL('browser.mjs', output));
 
 function dnsFixture(answer = () => undefined) {

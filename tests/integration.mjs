@@ -27,11 +27,11 @@ const env={DB:{prepare,async batch(items){sqlite.exec('BEGIN');try{const out=[];
    bytes=raw.slice(offset,offset+(options.range.length??size));range={offset,length:bytes.byteLength};
   }
   return {size,httpMetadata:bucketMetadata.get(key),range,body:new Blob([bytes]).stream(),text:async()=>new TextDecoder().decode(bytes),arrayBuffer:async()=>bytes.slice().buffer};
- },async delete(key){bucket.delete(key);bucketMetadata.delete(key);}
+ },async list({prefix='',limit=1000}={}){const keys=[...bucket.keys()].filter(k=>k.startsWith(prefix)).sort();return {objects:keys.slice(0,limit).map(key=>({key})),truncated:keys.length>limit};},async delete(keys){for(const key of Array.isArray(keys)?keys:[keys]){bucket.delete(key);bucketMetadata.delete(key);}}
 }};
 globalThis.__prismTest={env,getUser:async()=>user};
 await writeFile(new URL('context.mjs',dir),'export const env=globalThis.__prismTest.env; export const getChatGPTUser=globalThis.__prismTest.getUser;');
-const libraryModules=['models','provider','billing','beta','workspace-settings','workspace-tools','media-provider','media-workspace','browser-workspace','scheduled-tasks','schedule-time','work-artifacts','guest-chat','guest-import','request-security','upload-security','api-resource-guards'];
+const libraryModules = ['models', 'provider', 'chat-title', 'billing-contract', 'billing', 'beta', 'workspace-settings', 'workspace-tools', 'workspace-bootstrap', 'workspace-startup', 'conversation-actions', 'chat-generation', 'media-provider', 'media-workspace', 'browser-workspace', 'scheduled-tasks', 'schedule-time', 'work-artifacts', 'regenerate-style', 'guest-chat', 'guest-import', 'request-security', 'request-lease', 'schedule-runner', 'security-monitoring', 'account-deletion', 'upload-validation', 'image-validation', 'public-shares', 'upload-security', 'api-resource-guards'];
 for(const [source,dest] of [...libraryModules.map(name=>['lib/'+name+'.ts',name+'.mjs']),['app/api/[...path]/route.ts','route.mjs']]){
  let code=await readFile(new URL('../'+source,import.meta.url),'utf8');
  code=code.replaceAll("'cloudflare:workers'","'./context.mjs'").replaceAll("'../../chatgpt-auth'","'./context.mjs'");
@@ -39,19 +39,27 @@ for(const [source,dest] of [...libraryModules.map(name=>['lib/'+name+'.ts',name+
  const js=ts.transpileModule(code,{compilerOptions:{module:ts.ModuleKind.ESNext,target:ts.ScriptTarget.ES2022}}).outputText;
  await writeFile(new URL(dest,dir),js);
 }
-const route=await import(new URL('route.mjs',dir).href);const {MODELS}=await import(new URL('models.mjs',dir).href);const {invokeProvider}=await import(new URL('provider.mjs',dir).href);
+const route=await import(new URL('route.mjs',dir).href);const {MODELS,DEFAULT_MODEL_ID}=await import(new URL('models.mjs',dir).href);const {invokeProvider}=await import(new URL('provider.mjs',dir).href);
+const {storeWorkArtifacts}=await import(new URL('work-artifacts.mjs',dir).href);
 const originalFetch=globalThis.fetch;
-function req(path,method='GET',body,headers={}){return new Request('https://prism.test/api/'+path,{method,headers:{...(body&&!(body instanceof FormData)?{'Content-Type':'application/json'}:{}),...headers},...(body?{body:body instanceof FormData?body:JSON.stringify(body)}:{})});}
+const TEST_CREDIT=100000000000;
+function fundWallet(owner, amount=TEST_CREDIT){sqlite.prepare("INSERT INTO wallet_events VALUES (?,?, 'live','topup',?,?,?) ON CONFLICT(reference) DO NOTHING").run('fixture-credit:'+owner,owner,amount,'fixture-credit:'+owner,Date.now());}
+function clearWallet(owner){const trigger=sqlite.prepare("SELECT sql FROM sqlite_schema WHERE type='trigger' AND name='wallet_events_no_delete'").get()?.sql;try{if(trigger)sqlite.exec('DROP TRIGGER wallet_events_no_delete');sqlite.prepare('DELETE FROM wallet_events WHERE user_id=?').run(owner);}finally{if(trigger)sqlite.exec(trigger);}}
+
+function req(path,method='GET',body,headers={}){return new Request('https://prism.test/api/'+path,{method,headers:{origin:'https://prism.test',...(body&&!(body instanceof FormData)?{'Content-Type':'application/json'}:{}),...headers},...(body?{body:body instanceof FormData?body:JSON.stringify(body)}:{})});}
 async function call(path,method='GET',body,headers){return route[method](req(path,method,body,headers));}
+async function createShare(conversationId){const preview=await call('shares/preview?conversationId='+encodeURIComponent(conversationId));if(!preview.ok)return preview;return call('shares','POST',{conversationId,privacyConfirmed:true,previewHash:(await preview.json()).previewHash});}
 function mockSSE(events){return new Response(events.map(e=>'data: '+JSON.stringify(e)+'\n\n').join(''),{headers:{'content-type':'text/event-stream'}});}
+const resourceAttempts=()=>sqlite.prepare("SELECT COALESCE(SUM(event_count),0) n FROM security_event_windows WHERE category='resource_spike' AND route='/api/generation'").get().n;
 const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=','base64');
 const eventsOf=text=>text.split('\n').filter(line=>line.startsWith('data: ')).map(line=>JSON.parse(line.slice(6)));
 function referenceForm(bytes=png,type='image/png'){const form=new FormData();form.set('file',new File([bytes],'reference.png',{type}));return form;}
 async function isolated(owner,fn){
  const previousUser=user,previousEnv={...env},previousFetch=globalThis.fetch;
- user={userId:owner,email:owner+'@example.test'};env.BETA_MODE='true';env.OPENAI_API_KEY='test-only-key';
+ user={userId:owner,email:owner+'@example.test'};env.BETA_MODE='true';env.OPENAI_API_KEY='test-only-key';fundWallet(owner);
  try{await fn(owner);}finally{
-  for(const table of ['media_assets','work_artifacts','scheduled_tasks','browser_sessions','workspace_settings','files','conversations','usage'])sqlite.prepare('DELETE FROM '+table+' WHERE user_id=?').run(owner);
+  for(const table of ['media_assets','work_artifacts','scheduled_tasks','browser_sessions','workspace_settings','files','conversations','usage','chat_operations'])sqlite.prepare('DELETE FROM '+table+' WHERE user_id=?').run(owner);
+  clearWallet(owner);
   sqlite.prepare('DELETE FROM rate_limits WHERE key LIKE ?').run(owner+':%');
   for(const key of bucket.keys())if(key.startsWith(owner+'/')){bucket.delete(key);bucketMetadata.delete(key);}
   for(const key of Object.keys(env))if(!(key in previousEnv))delete env[key];
@@ -63,18 +71,18 @@ const billing=await import(new URL('billing.mjs',dir).href);
 test('anonymous requests cannot access private data',async()=>{user=null;for(const p of ['conversations','usage','files','admin','settings','search?q=test','shares','media','tasks','browser/sessions','integrations/drive'])assert.equal((await call(p)).status,401);const b=await(await call('bootstrap')).json();assert.equal(b.user,null);user={userId:'alice',email:'alice@example.test',fullName:'Alice'};});
 test('server secrets never appear in connection status',async()=>{env.OPENAI_API_KEY='test-only-key';const b=await(await call('bootstrap')).json();assert.equal(b.providers.openai.configured,true);assert.equal(JSON.stringify(b).includes('test-only-key'),false);delete env.OPENAI_API_KEY;});
 test('rejects invalid origins and invalid model IDs',async()=>{assert.equal((await call('chat','POST',{prompt:'Hi',model:'gpt-6-astra'},{origin:'https://other.test'})).status,403);assert.equal((await call('chat','POST',{prompt:'Hi',model:'made-up-model'})).status,400);});
-test('missing API credentials produce an explicit error with no artificial response',async()=>{const r=await call('chat','POST',{prompt:'Hi',model:'gpt-6-astra'});assert.equal(r.status,503);assert.equal((await r.json()).code,'PROVIDER_NOT_CONFIGURED');assert.equal(sqlite.prepare('SELECT COUNT(*) as n FROM conversations').get().n,0);});
+test('missing API credentials produce an explicit error with no artificial response',async()=>{fundWallet('alice');const r=await call('chat','POST',{prompt:'Hi',model:'gpt-6-astra'});assert.equal(r.status,503);assert.equal((await r.json()).code,'PROVIDER_NOT_CONFIGURED');assert.equal(sqlite.prepare('SELECT COUNT(*) as n FROM conversations').get().n,0);});
 test('unconfigured pricing blocks paid inference even with provider credentials',async()=>{env.OPENAI_API_KEY='test-only-key';const r=await call('chat','POST',{model:'gpt-6-astra',prompt:'Hi'});assert.equal(r.status,503);assert.equal((await r.json()).code,'PRICING_NOT_CONFIGURED');});
-test('configure approved test tariffs and seed isolated live test ledger',async()=>{sqlite.prepare("INSERT INTO billing_config VALUES ('launch',?,?)").run(JSON.stringify({rates:Object.fromEntries(MODELS.map(m=>[m.id,{input:1000,output:2000}])),refundPolicy:'',validityPolicy:'',registrationNumber:'',address:'',supportEmail:''}),Date.now());sqlite.prepare("INSERT INTO wallet_events VALUES ('test-seed','alice','live','topup',100000000000,'seed',?)").run(Date.now());});
+test('configure approved test tariffs and seed isolated live test ledger',async()=>{clearWallet('alice');sqlite.prepare("INSERT INTO billing_config VALUES ('launch',?,?)").run(JSON.stringify({rates:Object.fromEntries(MODELS.map(m=>[m.id,{input:1000,output:2000}])),refundPolicy:'',validityPolicy:'',registrationNumber:'',address:'',supportEmail:''}),Date.now());sqlite.prepare("INSERT INTO wallet_events VALUES ('test-seed','alice','live','topup',100000000000,'seed',?)").run(Date.now());});
 test('real handler streams provider output and persists chat and measured token usage',async()=>{env.OPENAI_API_KEY='test-only-key';globalThis.fetch=async(url,options)=>{assert.equal(url,'https://api.openai.com/v1/responses');const body=JSON.parse(options.body);assert.equal(body.reasoning.effort,'xhigh');assert.equal(body.reasoning.mode,undefined);assert.equal(body.store,false);assert.equal(body.input.at(-1).content,'Explain recursion.');return mockSSE([{type:'response.output_text.delta',delta:'A function '},{type:'response.output_text.delta',delta:'that calls itself.'},{type:'response.completed',response:{usage:{input_tokens:12,output_tokens:7}}}]);};const r=await call('chat','POST',{prompt:'Explain recursion.',model:'gpt-6-astra',effort:'xhigh',pro:false});assert.equal(r.status,200);const text=await r.text();assert.match(text,/that calls itself/);assert.match(text,/'?done'?/);const chats=await(await call('conversations')).json();assert.equal(chats.length,1);conversationId=chats[0].id;const detail=await(await call('conversations/'+conversationId)).json();assert.equal(detail.messages.length,2);assert.equal(detail.messages[1].content,'A function that calls itself.');const u=await(await call('usage')).json();assert.equal(u.totals.input_tokens,12);assert.equal(u.totals.output_tokens,7);assert.equal(u.totals.completed,1);});
-test('every conversation action enforces account ownership',async()=>{user={userId:'bob',email:'bob@example.test'};for(const method of ['GET','PATCH','DELETE'])assert.equal((await call('conversations/'+conversationId,method,method==='PATCH'?{title:'stolen'}:undefined)).status,404);assert.equal((await(await call('conversations')).json()).length,0);assert.equal((await call('chat','POST',{model:'gpt-6-astra',prompt:'Continue',conversationId})).status,404);user={userId:'alice',email:'alice@example.test'};});
+test('every conversation action enforces account ownership',async()=>{fundWallet('bob');user={userId:'bob',email:'bob@example.test'};for(const method of ['GET','PATCH','DELETE'])assert.equal((await call('conversations/'+conversationId,method,method==='PATCH'?{title:'stolen'}:undefined)).status,404);assert.equal((await(await call('conversations')).json()).length,0);assert.equal((await call('chat','POST',{model:'gpt-6-astra',prompt:'Continue',conversationId})).status,404);user={userId:'alice',email:'alice@example.test'};});
 test('file uploads, downloads, attachment ownership, and deletion work',async()=>{const form=new FormData();form.set('file',new File(['A small test document.'],'notes.txt'));const r=await call('files','POST',form);assert.equal(r.status,200);const f=await r.json();assert.equal((await(await call('files/'+f.id)).text()),'A small test document.');assert.equal((await(await call('files')).json()).length,1);user={userId:'bob',email:'bob@example.test'};assert.equal((await call('files/'+f.id)).status,404);assert.equal((await call('files/'+f.id,'DELETE')).status,404);assert.equal((await call('chat','POST',{prompt:'Read',model:'gpt-6-astra',fileIds:[f.id]})).status,400);user={userId:'alice',email:'alice@example.test'};assert.equal((await call('files/'+f.id,'DELETE')).status,200);assert.equal(bucket.size,0);const bad=new FormData();bad.set('file',new File(['not a PDF'],'notes.pdf'));assert.equal((await call('files','POST',bad)).status,400);});
 test('provider failure is recorded without saving a synthetic assistant message',async()=>{globalThis.fetch=async()=>new Response('{}',{status:429});const r=await call('chat','POST',{model:'gpt-6-astra',prompt:'Retry',conversationId});const body=await r.text();assert.match(body,/rate limit/);const detail=await(await call('conversations/'+conversationId)).json();assert.equal(detail.messages.filter(m=>m.role==='assistant').length,1);assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM usage WHERE status='error'").get().n,1);});
-test('active chat locks reject overlapping requests',async()=>{sqlite.prepare('INSERT INTO rate_limits VALUES (?,1,?)').run('chat:'+conversationId,Date.now()+20000);assert.equal((await call('chat','POST',{model:'gpt-6-astra',prompt:'Overlap',conversationId})).status,409);sqlite.prepare('DELETE FROM rate_limits WHERE key=?').run('chat:'+conversationId);});
+test('active chat locks reject overlapping requests',async()=>{sqlite.prepare('INSERT INTO rate_limits (key,count,expires_at) VALUES (?,1,?)').run('chat:'+conversationId,Date.now()+20000);assert.equal((await call('chat','POST',{model:'gpt-6-astra',prompt:'Overlap',conversationId})).status,409);sqlite.prepare('DELETE FROM rate_limits WHERE key=?').run('chat:'+conversationId);});
 test('admin route is closed unless the exact administrator ID is configured',async()=>{assert.equal((await call('admin')).status,403);env.ADMIN_USER_ID='bob';assert.equal((await call('admin')).status,403);env.ADMIN_USER_ID='alice';assert.equal((await call('admin')).status,200);delete env.ADMIN_USER_ID;});
 test('renaming is validated and deleting a conversation also removes messages',async()=>{assert.equal((await call('conversations/'+conversationId,'PATCH',{title:''})).status,400);assert.equal((await call('conversations/'+conversationId,'PATCH',{title:'Recursion notes'})).status,200);assert.equal((await(await call('conversations/'+conversationId)).json()).conversation.title,'Recursion notes');assert.equal((await call('conversations/'+conversationId,'DELETE')).status,200);assert.equal(sqlite.prepare('SELECT COUNT(*) as n FROM messages WHERE conversation_id=?').get(conversationId).n,0);});
 test('Anthropic adapter uses correct endpoint, streaming protocol, and measured usage',async()=>{globalThis.fetch=async(url,opts)=>{assert.equal(url,'https://api.anthropic.com/v1/messages');assert.equal(opts.headers['anthropic-version'],'2023-06-01');assert.equal(JSON.parse(opts.body).thinking.type,'adaptive');return mockSSE([{type:'message_start',message:{usage:{input_tokens:10}}},{type:'content_block_delta',delta:{type:'thinking_delta',thinking:'private'}},{type:'content_block_delta',delta:{type:'text_delta',text:'A clear answer.'}},{type:'message_delta',usage:{output_tokens:20},delta:{stop_reason:'end_turn'}},{type:'message_stop'}]);};let text='';const u=await invokeProvider(MODELS[1],'test-only-key',[{role:'user',content:'Hi'}],'high',false,new AbortController().signal,t=>text+=t);assert.equal(text,'A clear answer.');assert.deepEqual(u,{input:10,output:20});});
-test('Gemini adapter uses Interactions API and normalized responses',async()=>{globalThis.fetch=async(url,opts)=>{assert.equal(url,'https://generativelanguage.googleapis.com/v1beta/interactions');assert.equal(JSON.parse(opts.body).store,false);assert.equal(JSON.parse(opts.body).input[0].type,'user_input');return Response.json({status:'completed',steps:[{type:'model_output',content:[{type:'text',text:'A Gemini answer.'}]}],usage:{total_input_tokens:4,total_output_tokens:5,total_thought_tokens:3}});};let text='';const u=await invokeProvider(MODELS[2],'test-only-key',[{role:'user',content:'Hi'}],'medium',false,new AbortController().signal,t=>text+=t);assert.equal(text,'A Gemini answer.');assert.deepEqual(u,{input:4,output:8});});
+test('Gemini adapter uses streaming Interactions API and normalized usage',async()=>{globalThis.fetch=async(url,opts)=>{assert.equal(url,'https://generativelanguage.googleapis.com/v1beta/interactions');assert.equal(JSON.parse(opts.body).store,false);assert.equal(JSON.parse(opts.body).stream,true);assert.equal(JSON.parse(opts.body).input[0].type,'user_input');return mockSSE([{event_type:'step.start',index:0,step:{type:'model_output'}},{event_type:'step.delta',index:0,delta:{type:'text',text:'A Gemini '}},{event_type:'step.delta',index:0,delta:{type:'text',text:'answer.'}},{event_type:'interaction.completed',interaction:{status:'completed',usage:{total_input_tokens:4,total_output_tokens:5,total_thought_tokens:3}}}]);};let text='';const u=await invokeProvider(MODELS[2],'test-only-key',[{role:'user',content:'Hi'}],'medium',false,new AbortController().signal,t=>text+=t);assert.equal(text,'A Gemini answer.');assert.deepEqual(u,{input:4,output:8});});
 test('truncated streams fail instead of being marked complete',async()=>{globalThis.fetch=async()=>mockSSE([{type:'response.output_text.delta',delta:'partial'}]);await assert.rejects(()=>invokeProvider(MODELS[0],'test-only-key',[{role:'user',content:'Hi'}],'medium',false,new AbortController().signal,()=>{}),/before completing/);});
 
 test('workspace settings validate bounded input and remain isolated across owners',async()=>{
@@ -130,8 +138,8 @@ test('fresh owner settings and selected skills affect provider input without pol
 test('conversation search matches message text, escapes wildcards and scopes results to owner',async()=>{
  const now=Date.now();
  for(const [id,owner,title,content] of [['search-alice','alice','Research notes','The identifier is 100%_literal and the keyword is nebula.'],['search-bob','bob','Other account','This private nebula document belongs to Bob.']]){
-  sqlite.prepare('INSERT INTO conversations VALUES (?,?,?,?,?,?)').run(id,owner,title,'gpt-6-astra',now,now);
-  sqlite.prepare('INSERT INTO messages VALUES (?,?,?,?,?,?)').run(id+'-msg',id,'user',content,null,now);
+  sqlite.prepare('INSERT INTO conversations (id,user_id,title,model,created_at,updated_at) VALUES (?,?,?,?,?,?)').run(id,owner,title,'gpt-6-astra',now,now);
+  sqlite.prepare('INSERT INTO messages (id,conversation_id,role,content,model,created_at) VALUES (?,?,?,?,?,?)').run(id+'-msg',id,'user',content,null,now);
  }
  const results=(await(await call('search?q=nebula')).json()).results;
  assert.equal(results.length,1);assert.equal(results[0].id,'search-alice');assert.match(results[0].snippet,/nebula/);
@@ -145,12 +153,12 @@ test('conversation search matches message text, escapes wildcards and scopes res
 });
 test('public shares use immutable snapshots, exclude attached files and enforce ownership and revocation',async()=>{
  const now=Date.now();
- sqlite.prepare('INSERT INTO messages VALUES (?,?,?,?,?,?)').run('share-private-doc','search-alice','user','Read this\n\n<attached_document name="secret.txt">\nPRIVATE DOCUMENT\n</attached_document>\nADDITIONAL PRIVATE DOCUMENT\n</attached_document>',null,now+1);
- const created=await call('shares','POST',{conversationId:'search-alice'});assert.equal(created.status,201);
+ sqlite.prepare('INSERT INTO messages (id,conversation_id,role,content,model,created_at) VALUES (?,?,?,?,?,?)').run('share-private-doc','search-alice','user','Read this\n\n<attached_document name="secret.txt">\nPRIVATE DOCUMENT\n</attached_document>\nADDITIONAL PRIVATE DOCUMENT\n</attached_document>',null,now+1);
+ const created=await createShare('search-alice');assert.equal(created.status,201);
  const share=await created.json();assert.match(share.token,/^[a-f0-9]{64}$/);assert.equal(share.url,'https://prism.test/share/'+share.token);
  assert.equal((await(await call('shares')).json()).shares.length,1);
  user={userId:'bob',email:'bob@example.test'};
- assert.equal((await call('shares','POST',{conversationId:'search-alice'})).status,404);
+ assert.equal((await createShare('search-alice')).status,404);
  assert.equal((await call('shares/'+share.id,'DELETE')).status,404);
  assert.equal((await(await call('shares')).json()).shares.length,0);
  sqlite.prepare('UPDATE messages SET content=? WHERE id=?').run('Changed after sharing','search-alice-msg');
@@ -162,7 +170,7 @@ test('public shares use immutable snapshots, exclude attached files and enforce 
  assert.equal((await call('shares/'+share.id,'DELETE')).status,200);
  user=null;assert.equal((await call('public-shares/'+share.token)).status,404);
  user={userId:'alice',email:'alice@example.test'};
- const second=await(await call('shares','POST',{conversationId:'search-alice'})).json();
+ const second=await(await createShare('search-alice')).json();
  await call('conversations/search-alice','DELETE');
  assert.equal((await call('public-shares/'+second.token)).status,404);
 });
@@ -174,11 +182,11 @@ test('settings accept maximum valid escaped text while retaining scoped request 
   const settings={personalizationEnabled:true,customInstructions:escaped.repeat(4000),memory:escaped.repeat(8000),workResponseStyle:'plan-first',browserTarget:'current',browserPermission:'ask',skills:Array.from({length:20},(_,i)=>({id:'skill-'+i,name:escaped.repeat(60),instructions:escaped.repeat(4000)}))};
   const bytes=Buffer.byteLength(JSON.stringify(settings));assert.ok(bytes>500000&&bytes<600000);
   const saved=await call('settings','PATCH',settings);assert.equal(saved.status,200);assert.deepEqual(await saved.json(),settings);
-  const oversized=new Request('https://prism.test/api/settings',{method:'PATCH',headers:{'Content-Type':'application/json'},body:' '.repeat(600001)});
+  const oversized=new Request('https://prism.test/api/settings',{method:'PATCH',headers:{origin:'https://prism.test','Content-Type':'application/json'},body:' '.repeat(600001)});
   assert.equal((await route.PATCH(oversized)).status,413);
-  const otherMethod=new Request('https://prism.test/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:' '.repeat(200001)});
+  const otherMethod=new Request('https://prism.test/api/settings',{method:'POST',headers:{origin:'https://prism.test','Content-Type':'application/json'},body:' '.repeat(200001)});
   assert.equal((await route.POST(otherMethod)).status,413);
-  const otherEndpoint=new Request('https://prism.test/api/conversations/missing',{method:'PATCH',headers:{'Content-Type':'application/json'},body:' '.repeat(200001)});
+  const otherEndpoint=new Request('https://prism.test/api/conversations/missing',{method:'PATCH',headers:{origin:'https://prism.test','Content-Type':'application/json'},body:' '.repeat(200001)});
   assert.equal((await route.PATCH(otherEndpoint)).status,413);
  }finally{
   sqlite.prepare('DELETE FROM workspace_settings WHERE user_id=?').run('large-settings');
@@ -189,11 +197,11 @@ test('concurrent public share creation cannot exceed the owner limit',async()=>{
  user={userId:'share-cap',email:'share-cap@example.test'};
  const now=Date.now();
  try{
-  sqlite.prepare('INSERT INTO conversations VALUES (?,?,?,?,?,?)').run('share-cap-chat','share-cap','Limit test','gpt-6-astra',now,now);
-  sqlite.prepare('INSERT INTO messages VALUES (?,?,?,?,?,?)').run('share-cap-message','share-cap-chat','user','A sharable message.',null,now);
+  sqlite.prepare('INSERT INTO conversations (id,user_id,title,model,created_at,updated_at) VALUES (?,?,?,?,?,?)').run('share-cap-chat','share-cap','Limit test','gpt-6-astra',now,now);
+  sqlite.prepare('INSERT INTO messages (id,conversation_id,role,content,model,created_at) VALUES (?,?,?,?,?,?)').run('share-cap-message','share-cap-chat','user','A sharable message.',null,now);
   const insert=sqlite.prepare('INSERT INTO public_shares (id,user_id,conversation_id,token,title,snapshot,created_at) VALUES (?,?,?,?,?,?,?)');
   for(let i=0;i<99;i++)insert.run('share-cap-'+i,'share-cap','share-cap-chat',i.toString(16).padStart(64,'0'),'Limit test','[]',now);
-  const responses=await Promise.all(Array.from({length:4},()=>call('shares','POST',{conversationId:'share-cap-chat'})));
+  const responses=await Promise.all(Array.from({length:4},()=>createShare('share-cap-chat')));
   assert.equal(responses.filter(response=>response.status===201).length,1);
   assert.equal(responses.filter(response=>response.status===400).length,3);
   assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM public_shares WHERE user_id=?').get('share-cap').n,100);
@@ -219,26 +227,26 @@ test('invalid tools, missing integrations, and media sent to the chat endpoint c
   ]){
    const response=await call('chat','POST',{...base,...fields});assert.equal(response.status,status);assert.equal((await response.json()).code,code);
   }
-  for(const body of ['null','[]','true'])assert.equal((await route.POST(new Request('https://prism.test/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body}))).status,400);
+  for(const body of ['null','[]','true'])assert.equal((await route.POST(new Request('https://prism.test/api/chat',{method:'POST',headers:{origin:'https://prism.test','Content-Type':'application/json'},body}))).status,400);
   assert.equal(providerCalls,0);
   assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM usage WHERE user_id=?').get(user.userId).n,0);
   assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM conversations WHERE user_id=?').get(user.userId).n,0);
-  assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM rate_limits WHERE key LIKE ? AND key NOT LIKE ?').get(user.userId+':%','%:api-write').n,0);
+  assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM rate_limits WHERE key LIKE ? AND key NOT LIKE '%:api-write'").get(user.userId+':%').n,0);
   assert.equal(await billing.balance(env.DB,user.userId),0);
-  const boot=await(await call('bootstrap')).json();assert.deepEqual(boot.capabilities,{webResearch:false,image:true,video:false,music:false,remoteBrowser:false,drive:false,scheduled:false,codeExecution:true});
+  const boot=await(await call('bootstrap')).json();assert.deepEqual(boot.capabilities,{webResearch:false,image:true,video:false,music:false,remoteBrowser:false,drive:false,scheduled:false,codeExecution:false});
   user=null;assert.equal((await call('chat','POST',{...base,tool:'canvas'})).status,401);
  }finally{
   user=priorUser;if(priorBeta===undefined)delete env.BETA_MODE;else env.BETA_MODE=priorBeta;if(priorKey===undefined)delete env.OPENAI_API_KEY;else env.OPENAI_API_KEY=priorKey;if(priorWeb===undefined)delete env.WEB_RESEARCH_ENABLED;else env.WEB_RESEARCH_ENABLED=priorWeb;globalThis.fetch=originalFetch;
  }
 });
-test('Canvas, learning, and source research use actual provider output with normal persistence and beta metering',async()=>{
+test('Canvas, learning, and source research use actual provider output with normal persistence and paid metering',async()=>{
  const priorUser=user,priorBeta=env.BETA_MODE,priorKey=env.OPENAI_API_KEY;
  let providerInput='',providerCalls=0;
  try{
-  user={userId:'tool-inference',email:'tool-inference@example.test'};env.BETA_MODE='true';env.OPENAI_API_KEY='test-only-key';
+  user={userId:'tool-inference',email:'tool-inference@example.test'};fundWallet(user.userId);env.BETA_MODE='true';env.OPENAI_API_KEY='test-only-key';
   globalThis.fetch=async(url,options)=>{
    providerCalls++;assert.equal(url,'https://api.openai.com/v1/responses');
-   const body=JSON.parse(options.body);providerInput=body.input.at(-1).content;assert.equal(body.max_output_tokens,1024);assert.equal(body.store,false);assert.equal(body.tools,undefined);
+   const body=JSON.parse(options.body);providerInput=body.input.at(-1).content;assert.equal(body.max_output_tokens,8192);assert.equal(body.store,false);assert.equal(body.tools,undefined);
    return mockSSE([{type:'response.output_text.delta',delta:'A provider-generated result.'},{type:'response.completed',response:{usage:{input_tokens:30,output_tokens:10}}}]);
   };
   const form=new FormData();form.set('file',new File(['Confirmed finding: the study involved 12 participants.'],'study-notes.txt'));
@@ -257,8 +265,8 @@ test('Canvas, learning, and source research use actual provider output with norm
    if(tool==='research'){assert.match(providerInput,/study-notes\.txt/);assert.match(providerInput,/12 participants/);assert.match(providerInput,/never invent source URLs/);}else assert.equal(detail.messages[0].content,prompt);
   }
   assert.equal(providerCalls,3);
-  assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM usage WHERE user_id=? AND status='complete' AND rate_snapshot='beta:v1'").get(user.userId).n,3);
-  assert.equal(await billing.balance(env.DB,user.userId),0);
+  assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM usage WHERE user_id=? AND status='complete' AND rate_snapshot NOT LIKE 'beta:%'").get(user.userId).n,3);
+  assert.equal(await billing.balance(env.DB,user.userId),TEST_CREDIT-3*(30*1000+10*2000));
   assert.equal((await call('files/'+file.id,'DELETE')).status,200);
  }finally{
   user=priorUser;if(priorBeta===undefined)delete env.BETA_MODE;else env.BETA_MODE=priorBeta;if(priorKey===undefined)delete env.OPENAI_API_KEY;else env.OPENAI_API_KEY=priorKey;globalThis.fetch=originalFetch;
@@ -269,7 +277,7 @@ test('conversation chronology survives same-millisecond responses, clock rollbac
  let clock=originalNow(),providerInputs=[];
  try{
   Date.now=()=>clock;
-  user={userId:'chronology-user',email:'chronology@example.test'};env.BETA_MODE='true';env.OPENAI_API_KEY='test-only-key';
+  user={userId:'chronology-user',email:'chronology@example.test'};fundWallet(user.userId);env.BETA_MODE='true';env.OPENAI_API_KEY='test-only-key';
   globalThis.fetch=async(url,options)=>{
    const turns=JSON.parse(options.body).input;providerInputs.push(turns);
    for(const turn of turns)assert.deepEqual(Object.keys(turn).sort(),['content','role']);
@@ -290,15 +298,15 @@ test('conversation chronology survives same-millisecond responses, clock rollbac
   for(let i=1;i<detail.messages.length;i++)assert.ok(detail.messages[i].created_at>detail.messages[i-1].created_at);
   assert.equal(detail.conversation.updated_at,detail.messages.at(-1).created_at);
   assert.deepEqual(providerInputs[1].map(turn=>turn.content),['Question 1','Answer 1','Question 2']);
-  const published=await(await call('shares','POST',{conversationId:id})).json();
+  const published=await(await createShare(id)).json();
   const shared=await(await call('public-shares/'+published.token)).json();
   assert.deepEqual(shared.messages.map(message=>message.content),detail.messages.map(message=>message.content));
 
   // Earlier releases stored random IDs with equal times; their insert order is
   // authoritative. Deliberately make lexical ID order contradict chronology.
-  sqlite.prepare('INSERT INTO conversations VALUES (?,?,?,?,?,?)').run('legacy-time-tie',user.userId,'Legacy','gpt-6.1-sol',clock,clock);
-  sqlite.prepare('INSERT INTO messages VALUES (?,?,?,?,?,?)').run('z-legacy-question','legacy-time-tie','user','Legacy question',null,clock);
-  sqlite.prepare('INSERT INTO messages VALUES (?,?,?,?,?,?)').run('a-legacy-answer','legacy-time-tie','assistant','Legacy answer','gpt-6.1-sol',clock);
+  sqlite.prepare('INSERT INTO conversations (id,user_id,title,model,created_at,updated_at) VALUES (?,?,?,?,?,?)').run('legacy-time-tie',user.userId,'Legacy','gpt-6.1-sol',clock,clock);
+  sqlite.prepare('INSERT INTO messages (id,conversation_id,role,content,model,created_at) VALUES (?,?,?,?,?,?)').run('z-legacy-question','legacy-time-tie','user','Legacy question',null,clock);
+  sqlite.prepare('INSERT INTO messages (id,conversation_id,role,content,model,created_at) VALUES (?,?,?,?,?,?)').run('a-legacy-answer','legacy-time-tie','assistant','Legacy answer','gpt-6.1-sol',clock);
   assert.deepEqual((await(await call('conversations/legacy-time-tie')).json()).messages.map(message=>message.role),['user','assistant']);
   await readEvents(await call('chat','POST',{model:'gpt-6.1-sol',prompt:'Continue legacy',conversationId:'legacy-time-tie'}));
   assert.deepEqual(providerInputs[2].map(turn=>turn.content),['Legacy question','Legacy answer','Continue legacy']);
@@ -338,16 +346,40 @@ test('production checkout is disabled until launch details and live keys are com
  assert.equal(billing.paymentMode(await billing.getBillingConfig(env.DB)),'disabled');
  delete env.LAUNCH_APPROVED;
 });
+test('upgrade catalog is public but account balances and payment mutations require sign-in',async()=>{
+ const prior=user;
+ user=null;
+ const response=await call('upgrade');
+ assert.equal(response.status,200);
+ const catalog=await response.json();
+ assert.equal(catalog.signedIn,false);
+ assert.equal(catalog.balance,null);
+ assert.equal(catalog.testBalance,null);
+ assert.deepEqual(catalog.products.map(product=>product.amount),[10000,30000,50000]);
+ assert.equal(Object.hasOwn(catalog,'clientKey'),false);
+ assert.equal(Object.hasOwn(catalog,'payments'),false);
+ assert.equal((await call('billing')).status,401);
+ assert.equal((await call('payments/orders/prism_missing')).status,401);
+ assert.equal((await call('payments/orders','POST',{})).status,401);
+ user=prior;
+ assert.equal((await call('admin/payments')).status,403);
+ assert.equal((await call('admin/payments/cancel','POST',{})).status,403);
+ assert.equal((await call('payments/orders','POST',{}, {origin:'https://other.test'})).status,403);
+});
 test('test checkout validates packs, owner and amount before calling Toss',async()=>{
  env.PAYMENTS_MODE='test';env.TOSS_SECRET_KEY='test_sk_test';env.TOSS_CLIENT_KEY='test_ck_test';
- assert.equal((await call('payments/orders','POST',{amount:1})).status,400);
- const order=await(await call('payments/orders','POST',{amount:10000})).json();
+ const catalog=await(await call('upgrade')).json();
+ const consent={accepted:true,version:catalog.terms.version,policyHash:catalog.terms.policyHash};
+ assert.equal((await call('payments/orders','POST',{productId:'invalid',requestId:crypto.randomUUID(),consent})).status,400);
+ const orderResponse=await call('payments/orders','POST',{productId:catalog.products[0].id,requestId:crypto.randomUUID(),consent});
+ assert.equal(orderResponse.status,200);
+ const order=await orderResponse.json();
  assert.equal(order.amount,10000);assert.equal(order.mode,'test');
  assert.equal((await call('payments/confirm','POST',{orderId:order.orderId,amount:1,paymentKey:'pk-test'})).status,409);
  user={userId:'bob',email:'bob@example.test'};
  assert.equal((await call('payments/confirm','POST',{orderId:order.orderId,amount:10000,paymentKey:'pk-test'})).status,404);
  user={userId:'alice',email:'alice@example.test'};
- const verified={orderId:order.orderId,paymentKey:'pk-test',currency:'KRW',totalAmount:10000,balanceAmount:10000,status:'DONE',cancels:[]};
+ const verified={orderId:order.orderId,paymentKey:'pk-test',currency:'KRW',totalAmount:10000,balanceAmount:10000,status:'DONE',approvedAt:new Date().toISOString(),cancels:[]};
  globalThis.fetch=async(url,opts)=>{assert.match(url,/^https:\/\/api.tosspayments.com\/v1\/payments\//);assert.ok(opts.headers.Authorization.startsWith('Basic '));return Response.json(verified);};
  for(let i=0;i<2;i++)assert.equal((await call('payments/confirm','POST',{orderId:order.orderId,amount:10000,paymentKey:'pk-test'})).status,200);
  assert.equal(await billing.balance(env.DB,'alice','test'),10000000000);
@@ -357,14 +389,23 @@ test('test checkout validates packs, owner and amount before calling Toss',async
 test('webhooks re-query provider state; forged webhook amounts cannot create credit',async()=>{
  const before=await billing.balance(env.DB,'alice','test');
  globalThis.fetch=async()=>Response.json({orderId:'wrong-order',status:'DONE',paymentKey:'pk-test',currency:'KRW',totalAmount:999999,balanceAmount:999999});
- assert.equal((await call('payments/webhook','POST',{data:{paymentKey:'pk-test',amount:999999,status:'DONE'}})).status,409);
+ assert.equal((await call('payments/webhook','POST',{eventType:'PAYMENT_STATUS_CHANGED',data:{paymentKey:'pk-test',amount:999999,status:'DONE'}})).status,409);
  assert.equal(await billing.balance(env.DB,'alice','test'),before);
- assert.equal((await call('payments/webhook','POST',{data:{paymentKey:'unknown'}})).status,404);
+ const unknown=await call('payments/webhook','POST',{eventType:'PAYMENT_STATUS_CHANGED',data:{paymentKey:'unknown'}});
+ assert.equal(unknown.status,200);
+ assert.deepEqual(await unknown.json(),{ok:true,ignored:true});
+ assert.equal(await billing.balance(env.DB,'alice','test'),before);
  globalThis.fetch=originalFetch;delete env.PAYMENTS_MODE;delete env.TOSS_SECRET_KEY;delete env.TOSS_CLIENT_KEY;
 });
 test('billing settings reject unauthorized changes, unknown models and non-integer rates',async()=>{
  assert.equal((await call('admin/billing','POST',{})).status,403);
  env.ADMIN_USER_ID='alice';
+ const operations=await call('admin/payments');
+ assert.equal(operations.status,200);
+ const operationData=await operations.json();
+ assert.ok(Array.isArray(operationData.payments));
+ assert.ok(Array.isArray(operationData.refunds));
+ assert.equal(JSON.stringify(operationData).includes('payment_key'),false);
  const config=await billing.getBillingConfig(env.DB);
  assert.equal((await call('admin/billing','POST',{...config,rates:{invented:{input:1,output:2}}})).status,400);
  assert.equal((await call('admin/billing','POST',{...config,rates:{'gpt-6-astra':{input:0.1,output:2}}})).status,400);
@@ -386,7 +427,7 @@ test('missing billable usage cannot silently become free inference',async()=>{
  globalThis.fetch=originalFetch;
 });
 test('body size limits apply even without a content-length header',async()=>{
- const request=new Request('https://prism.test/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:'x'.repeat(200001)});
+ const request=new Request('https://prism.test/api/chat',{method:'POST',headers:{origin:'https://prism.test','Content-Type':'application/json'},body:'x'.repeat(200001)});
  assert.equal((await route.POST(request)).status,413);
 });
 test('admin reconciliation uses captured rates and cannot change a settled amount',async()=>{
@@ -402,22 +443,25 @@ test('admin reconciliation uses captured rates and cannot change a settled amoun
 });
 
 
-test('web research uses real provider search metadata, persists citations, and bills actual tool calls',async()=>isolated('web-research',async owner=>{
+test('unpriced web research stays unavailable while its provider adapter preserves real citations and metering',async()=>isolated('web-research',async owner=>{
  let calls=0;
  const answer='The measured finding is 12.';
  globalThis.fetch=async(url,options)=>{
   calls++;assert.equal(url,'https://api.openai.com/v1/responses');const body=JSON.parse(options.body);
-  assert.deepEqual(body.tools,[{type:'web_search',external_web_access:true,search_context_size:'low'}]);assert.equal(body.tool_choice,'required');assert.equal(body.max_tool_calls,2);
-  assert.match(body.input.at(-1).content,/untrusted/i);assert.equal(body.store,false);
+  assert.deepEqual(body.tools,[{type:'web_search',external_web_access:true,search_context_size:'low'}]);assert.equal(body.tool_choice,'required');assert.equal(body.max_tool_calls,2);assert.equal(body.store,false);
   return mockSSE([{type:'response.output_text.delta',delta:answer},{type:'response.completed',response:{usage:{input_tokens:40,output_tokens:12},output:[
    {type:'web_search_call',id:'search-real',action:{type:'search',sources:[{url:'https://example.org/study',title:'Study'}]}},
    {type:'message',content:[{type:'output_text',text:answer,annotations:[{type:'url_citation',url:'https://example.org/study',title:'Study',start_index:0,end_index:answer.length},{type:'url_citation',url:'javascript:alert(1)',title:'Unsafe',start_index:0,end_index:0}]}]}
   ]}}]);
  };
- const response=await call('chat','POST',{model:'gpt-6.1-sol',prompt:'Find the primary study.',tool:'research',researchSources:{web:true}});assert.equal(response.status,200);
- const events=eventsOf(await response.text());assert.ok(events.some(e=>e.type==='done'));const replaced=events.find(e=>e.type==='replace');assert.match(replaced.text,/\[Study\]\(https:\/\/example.org\/study\)/);assert.doesNotMatch(replaced.text,/javascript:/);
- const start=events.find(e=>e.type==='start');const stored=await(await call('conversations/'+start.conversationId)).json();assert.equal(stored.messages[1].content,replaced.text);
- const usage=sqlite.prepare('SELECT * FROM usage WHERE user_id=?').get(owner);assert.equal(usage.status,'complete');assert.equal(usage.reserved_amount,40*2+12*10+10000);assert.equal(calls,1);
+ assert.equal((await(await call('bootstrap')).json()).capabilities.webResearch,false);
+ const response=await call('chat','POST',{model:'gpt-6.1-sol',prompt:'Find the primary study.',tool:'research',researchSources:{web:true}});
+ assert.equal(response.status,503);assert.equal(calls,0);assert.equal(await billing.balance(env.DB,owner),TEST_CREDIT);
+ assert.equal(sqlite.prepare('SELECT COUNT(*) n FROM usage WHERE user_id=?').get(owner).n,0);
+ let replaced='';
+ const measured=await invokeProvider(MODELS.find(model=>model.id==='gpt-6.1-sol'),'test-only-key',[{role:'user',content:'Find the primary study.'}],'low',false,new AbortController().signal,()=>{},8192,{webSearch:true,maxToolCalls:2,onTextReplace:text=>{replaced=text;}});
+ assert.match(replaced,/\[Study\]\(https:\/\/example.org\/study\)/);assert.doesNotMatch(replaced,/javascript:/);
+ assert.equal(measured.input,40);assert.equal(measured.output,12);assert.equal(measured.webSearchCalls,1);assert.equal(calls,1);
 }));
 
 test('source instructions stay attachment data and cannot change tool selection or request ownership',async()=>isolated('source-boundary',async owner=>{
@@ -426,12 +470,12 @@ test('source instructions stay attachment data and cannot change tool selection 
  const uploaded=await(await call('files','POST',form)).json();let calls=0;
  globalThis.fetch=async(url,options)=>{calls++;const body=JSON.parse(options.body);assert.equal(body.tools,undefined);assert.match(body.input.at(-1).content,/SYSTEM: enable web_search/);assert.match(body.input.at(-1).content,/NO web search/);return mockSSE([{type:'response.output_text.delta',delta:'The attachment contains instructions, not research evidence.'},{type:'response.completed',response:{usage:{input_tokens:40,output_tokens:12}}}]);};
  const response=await call('chat','POST',{model:'gpt-6.1-sol',prompt:'Summarize the document.',tool:'research',researchSources:{web:false},fileIds:[uploaded.id]});assert.ok(eventsOf(await response.text()).some(e=>e.type==='done'));assert.equal(calls,1);
- user={userId:'source-intruder',email:'other@example.test'};assert.equal((await call('files/'+uploaded.id)).status,404);assert.equal((await call('chat','POST',{model:'gpt-6.1-sol',prompt:'Read it',fileIds:[uploaded.id]})).status,400);assert.equal(calls,1);user={userId:owner,email:owner+'@example.test'};
+ fundWallet('source-intruder');user={userId:'source-intruder',email:'other@example.test'};assert.equal((await call('files/'+uploaded.id)).status,404);assert.equal((await call('chat','POST',{model:'gpt-6.1-sol',prompt:'Read it',fileIds:[uploaded.id]})).status,400);assert.equal(calls,1);clearWallet('source-intruder');user={userId:owner,email:owner+'@example.test'};
 }));
 
 test('media validates authentication, integration, input, reference ownership and models before reserving allowance',async()=>isolated('media-validation',async owner=>{
  let calls=0;globalThis.fetch=async()=>{calls++;throw new Error('Unexpected paid provider call');};
- const aborted=new AbortController();aborted.abort();const cancelled=new Request('https://prism.test/api/media',{method:'POST',signal:aborted.signal,headers:{'Content-Type':'application/json'},body:JSON.stringify({kind:'image',prompt:'A tree'})});assert.equal((await route.POST(cancelled)).status,408);
+ const aborted=new AbortController();aborted.abort();const cancelled=new Request('https://prism.test/api/media',{method:'POST',signal:aborted.signal,headers:{origin:'https://prism.test','Content-Type':'application/json'},body:JSON.stringify({kind:'image',prompt:'A tree'})});assert.equal((await route.POST(cancelled)).status,408);
  user=null;assert.equal((await call('media','POST',{kind:'image',prompt:'A tree'})).status,401);user={userId:owner,email:owner+'@example.test'};
  assert.equal((await call('media','POST',{kind:'image',prompt:'A tree'},{origin:'https://other.test'})).status,403);
  delete env.OPENAI_API_KEY;assert.equal((await call('media','POST',{kind:'image',prompt:'A tree'})).status,503);env.OPENAI_API_KEY='test-only-key';
@@ -455,8 +499,8 @@ test('reference upload cap remains atomic under concurrent requests and cleans r
 }));
 
 test('real image output is saved once, privately streamed with ranges, and shares beta spending limits',async()=>isolated('media-image',async owner=>{
- let calls=0;
- globalThis.fetch=async(url,options)=>{calls++;assert.equal(url,'https://api.openai.com/v1/images/generations');const body=JSON.parse(options.body);assert.equal(body.model,'gpt-image-2.5-flare');assert.equal(body.quality,'low');assert.equal(body.n,1);return Response.json({data:[{b64_json:png.toString('base64')}],usage:{input_tokens:18,output_tokens:196}});};
+ let calls=0;const attemptsBefore=resourceAttempts();
+ globalThis.fetch=async(url,options)=>{calls++;const reserved=sqlite.prepare('SELECT status,reserved_amount FROM usage WHERE user_id=?').get(owner);assert.equal(reserved.status,'pending');assert.ok(reserved.reserved_amount>0);assert.equal(url,'https://api.openai.com/v1/images/generations');const body=JSON.parse(options.body);assert.equal(body.model,'gpt-image-2.5-flare');assert.equal(body.quality,'low');assert.equal(body.n,1);return Response.json({data:[{b64_json:png.toString('base64')}],usage:{input_tokens:18,output_tokens:196}});};
  const response=await call('media','POST',{kind:'image',prompt:'A small tree.'});assert.equal(response.status,201);const asset=await response.json();assert.equal(asset.status,'complete');assert.equal(asset.kind,'image');assert.equal(asset.url,'/api/media/'+asset.id+'/content');assert.equal(asset.object_key,undefined);assert.equal(asset.user_id,undefined);
  const stored=sqlite.prepare('SELECT * FROM media_assets WHERE id=?').get(asset.id);assert.deepEqual(Buffer.from(bucket.get(stored.object_key)),png);
  const usage=sqlite.prepare('SELECT * FROM usage WHERE user_id=?').get(owner);assert.equal(usage.status,'complete');assert.equal(usage.input_tokens,18);assert.equal(usage.output_tokens,196);assert.equal(usage.reserved_amount,150000);
@@ -469,6 +513,7 @@ test('real image output is saved once, privately streamed with ranges, and share
  user={userId:'media-intruder',email:'other@example.test'};for(const [path,method] of [[asset.id,'GET'],[asset.id+'/content','GET'],[asset.id+'/refresh','POST'],[asset.id,'DELETE']])assert.equal((await call('media/'+path,method)).status,404);assert.deepEqual((await(await call('media')).json()).assets,[]);user={userId:owner,email:owner+'@example.test'};
  assert.equal((await call('media','POST',{kind:'image',prompt:'A second tree.'})).status,429);assert.equal(calls,1);
  assert.equal((await call('media/'+asset.id,'DELETE')).status,200);assert.equal(bucket.has(stored.object_key),false);assert.equal(sqlite.prepare('SELECT reserved_amount FROM usage WHERE id=?').get(usage.id).reserved_amount,150000);
+ assert.equal(resourceAttempts(),attemptsBefore+1,'polls, downloads and a rejected reservation must not count as new generation');
 }));
 
 test('provider media failures are explicit, retain the reservation, and never persist fake files or secrets',async()=>isolated('media-denied',async owner=>{
@@ -478,14 +523,15 @@ test('provider media failures are explicit, retain the reservation, and never pe
  assert.equal(asset.status,'error');assert.equal(asset.object_key,null);assert.equal(usage.status,'error');assert.equal(usage.reserved_amount,150000);assert.equal([...bucket.keys()].filter(key=>key.startsWith(owner+'/')).length,0);assert.doesNotMatch(asset.error,new RegExp(secret));
 }));
 
-test('pending media blocks account deletion and a missing finalization row cannot leave an orphaned asset',async()=>isolated('media-finalization',async owner=>{
+test('account deletion waits for pending media and a missing finalization row cannot leave an orphaned asset',async()=>isolated('media-finalization',async owner=>{
  let resolveProvider,markStarted;const started=new Promise(resolve=>{markStarted=resolve;});const provider=new Promise(resolve=>{resolveProvider=resolve;});
  globalThis.fetch=async()=>{markStarted();await provider;return Response.json({data:[{b64_json:png.toString('base64')}],usage:{input_tokens:18,output_tokens:196}});};
  const creation=call('media','POST',{kind:'image',prompt:'A tree'});await started;
- assert.equal((await call('account/data','DELETE')).status,409);
- const row=sqlite.prepare('SELECT * FROM media_assets WHERE user_id=?').get(owner);assert.equal((await call('media/'+row.id,'DELETE')).status,409);
+ const pending=await call('account/data','DELETE');assert.equal(pending.status,202);assert.equal((await pending.json()).activeOperations,1);
+ const row=sqlite.prepare('SELECT * FROM media_assets WHERE user_id=?').get(owner);assert.equal((await call('media/'+row.id,'DELETE')).status,423);
  sqlite.prepare('DELETE FROM media_assets WHERE id=?').run(row.id);resolveProvider();assert.equal((await creation).status,409);
  assert.equal([...bucket.keys()].filter(key=>key.startsWith(owner+'/')).length,0);assert.equal(sqlite.prepare('SELECT status FROM usage WHERE id=?').get(row.usage_id).status,'error');
+ assert.equal((await call('account/data','DELETE')).status,200);
 }));
 
 test('video refresh distinguishes terminal provider failure from retryable transport errors',async()=>isolated('video-failure',async owner=>{
@@ -512,36 +558,51 @@ test('video requires an approved server budget and completes a real provider job
  assert.equal((await call('media/'+asset.id+'/refresh','POST')).status,200);assert.equal(calls,3);const usage=sqlite.prepare('SELECT * FROM usage WHERE user_id=?').get(owner);assert.equal(usage.status,'complete');assert.equal(usage.reserved_amount,1500000);
 }));
 
-test('Work runs optional Python, stores real generated file bytes, and bills a reused container only once',async()=>isolated('work-files',async owner=>{
+test('paid Work sends no unpriced interpreter and existing artifact storage remains real, private, and deletion-safe',async()=>isolated('work-files',async owner=>{
  const bytes=Buffer.from('item,value\nmeasured,12\n');let modelCalls=0,fileCalls=0;
  const answer='The computed value is 12. [CSV](sandbox:/mnt/data/result.csv)';
  globalThis.fetch=async(url,options)=>{
   if(url==='https://api.openai.com/v1/responses'){
-   modelCalls++;const body=JSON.parse(options.body);assert.equal(body.tool_choice,'auto');assert.equal(body.max_tool_calls,2);assert.deepEqual(body.tools,[{type:'code_interpreter',container:{type:'auto',memory_limit:'1g',network_policy:{type:'disabled'}}}]);
-   assert.match(body.input.at(-1).content,/isolated sandbox with network access disabled/);
+   modelCalls++;const body=JSON.parse(options.body);
+   if(!body.tools){
+    assert.doesNotMatch(body.input.at(-1).content,/supplied code_interpreter tool/);
+    return mockSSE([{type:'response.output_text.delta',delta:'A paid Work text answer.'},{type:'response.completed',response:{usage:{input_tokens:30,output_tokens:10}}}]);
+   }
+   assert.equal(body.tool_choice,'auto');assert.equal(body.max_tool_calls,2);assert.deepEqual(body.tools,[{type:'code_interpreter',container:{type:'auto',memory_limit:'1g',network_policy:{type:'disabled'}}}]);
    const output=[{type:'code_interpreter_call',id:'ci_first',container_id:'cntr_work'},{type:'code_interpreter_call',id:'ci_second',container_id:'cntr_work'},{type:'message',content:[{type:'output_text',text:answer,annotations:[{type:'container_file_citation',container_id:'cntr_work',file_id:'cfile_result',filename:'../../result.csv',start_index:26,end_index:answer.length}]}]}];
    return mockSSE([{type:'response.output_text.delta',delta:answer},{type:'response.completed',response:{output,usage:{input_tokens:30,output_tokens:10}}}]);
   }
-  fileCalls++;assert.equal(url,'https://api.openai.com/v1/containers/cntr_work/files/cfile_result/content');assert.equal(options.headers.Authorization,'Bearer test-only-key');assert.equal(options.redirect,'error');return new Response(bytes);
+  fileCalls++;assert.equal(url,'https://api.openai.com/v1/containers/cntr_work/files/cfile_result/content');assert.equal(options.headers.Authorization,'Bearer test-only-key');assert.equal(options.redirect,'manual');return new Response(bytes);
  };
- const response=await call('chat','POST',{model:'gpt-6.1-sol',prompt:'Calculate 3 times 4 using Python and provide a CSV.',workspaceMode:'work'});assert.equal(response.status,200);const events=eventsOf(await response.text());const done=events.find(e=>e.type==='done');assert.ok(done);assert.equal(done.usage.codeInterpreterContainers,1);assert.equal(modelCalls,1);assert.equal(fileCalls,1);
+ assert.equal((await(await call('bootstrap')).json()).capabilities.codeExecution,false);
+ const response=await call('chat','POST',{model:'gpt-6.1-sol',prompt:'Explain 3 times 4.',workspaceMode:'work'});assert.equal(response.status,200);
+ const events=eventsOf(await response.text()),done=events.find(e=>e.type==='done');assert.ok(done);assert.equal(done.usage.codeInterpreterContainers,undefined);assert.equal(fileCalls,0);
+ const before=await billing.balance(env.DB,owner);assert.equal(before,TEST_CREDIT-50000);
+ // Existing provider-produced artifacts still have to remain downloadable and
+ // account-scoped even though new paid interpreter generation is unavailable.
+ const measured=await invokeProvider(MODELS.find(model=>model.id==='gpt-6.1-sol'),'test-only-key',[{role:'user',content:'Calculate and generate a CSV.'}],'low',false,new AbortController().signal,()=>{},8192,{codeInterpreter:true,maxToolCalls:2});
+ assert.equal(measured.codeInterpreterContainers,1);assert.equal(measured.artifacts.length,1);
+ await storeWorkArtifacts(env,env.DB,owner,done.conversationId,measured.artifacts,new AbortController().signal);
+ assert.equal(modelCalls,2);assert.equal(fileCalls,1);
  const row=sqlite.prepare('SELECT * FROM work_artifacts WHERE user_id=?').get(owner);assert.ok(row);assert.equal(row.name,'result.csv');assert.deepEqual(Buffer.from(bucket.get(row.object_key)),bytes);
- const stored=await(await call('conversations/'+done.conversationId)).json();assert.match(stored.messages[1].content,new RegExp('/api/artifacts/'+row.id));assert.doesNotMatch(stored.messages[1].content,/sandbox:|cntr_work|cfile_result/);
- const usage=sqlite.prepare('SELECT * FROM usage WHERE user_id=?').get(owner);assert.equal(usage.status,'complete');assert.equal(usage.reserved_amount,30000+30*2+10*10);
+ const usage=sqlite.prepare('SELECT * FROM usage WHERE user_id=?').get(owner);assert.equal(usage.status,'complete');
  const download=await call('artifacts/'+row.id);assert.equal(download.status,200);assert.equal(download.headers.get('X-Content-Type-Options'),'nosniff');assert.match(download.headers.get('Content-Disposition'),/^attachment;/);assert.deepEqual(Buffer.from(await download.arrayBuffer()),bytes);
  user=null;assert.equal((await call('artifacts/'+row.id)).status,401);user={userId:'work-intruder',email:'other@example.test'};assert.equal((await call('artifacts/'+row.id)).status,404);user={userId:owner,email:owner+'@example.test'};
- assert.equal((await call('conversations/'+done.conversationId,'DELETE')).status,200);assert.equal((await call('artifacts/'+row.id)).status,404);assert.equal(bucket.has(row.object_key),false);assert.equal(sqlite.prepare('SELECT reserved_amount FROM usage WHERE id=?').get(usage.id).reserved_amount,30160);
- const second=await call('chat','POST',{model:'gpt-6.1-sol',prompt:'Calculate again and provide a CSV.',workspaceMode:'work'});assert.ok(eventsOf(await second.text()).some(e=>e.type==='done'));const next=sqlite.prepare('SELECT * FROM work_artifacts WHERE user_id=?').get(owner);assert.ok(next);
- const retained=sqlite.prepare('SELECT SUM(reserved_amount) AS total FROM usage WHERE user_id=?').get(owner).total;assert.equal((await call('account/data','DELETE')).status,200);assert.equal((await call('artifacts/'+next.id)).status,404);assert.equal(bucket.has(next.object_key),false);assert.equal(sqlite.prepare('SELECT SUM(reserved_amount) AS total FROM usage WHERE user_id=?').get(owner).total,retained);
+ assert.equal((await call('conversations/'+done.conversationId,'DELETE')).status,200);assert.equal((await call('artifacts/'+row.id)).status,404);assert.equal(bucket.has(row.object_key),false);assert.equal(sqlite.prepare('SELECT reserved_amount FROM usage WHERE id=?').get(usage.id).reserved_amount,usage.reserved_amount);assert.equal(await billing.balance(env.DB,owner),before);
+ const second=await call('chat','POST',{model:'gpt-6.1-sol',prompt:'Explain another calculation.',workspaceMode:'work'}),secondDone=eventsOf(await second.text()).find(e=>e.type==='done');assert.ok(secondDone);
+ await storeWorkArtifacts(env,env.DB,owner,secondDone.conversationId,measured.artifacts,new AbortController().signal);
+ const next=sqlite.prepare('SELECT * FROM work_artifacts WHERE user_id=?').get(owner);assert.ok(next);
+ const retained=sqlite.prepare('SELECT SUM(reserved_amount) AS total FROM usage WHERE user_id=?').get(owner).total;
+ assert.equal((await call('account/data','DELETE')).status,200);assert.equal((await call('artifacts/'+next.id)).status,404);assert.equal(bucket.has(next.object_key),false);assert.equal(sqlite.prepare('SELECT SUM(reserved_amount) AS total FROM usage WHERE user_id=?').get(owner).total,retained);
 }));
 
-test('failed Work file downloads preserve the answer without fake links or partial stored files',async()=>isolated('work-file-failure',async owner=>{
- let fileCalls=0;globalThis.fetch=async url=>{
-  if(url==='https://api.openai.com/v1/responses')return mockSSE([{type:'response.output_text.delta',delta:'The calculation is complete.'},{type:'response.completed',response:{usage:{input_tokens:30,output_tokens:10},output:[{type:'code_interpreter_call',id:'ci_failed_download',container_id:'cntr_failed_download'},{type:'message',content:[{type:'output_text',text:'The calculation is complete.',annotations:[{type:'container_file_citation',container_id:'cntr_failed_download',file_id:'cfile_first',filename:'first.csv'},{type:'container_file_citation',container_id:'cntr_failed_download',file_id:'cfile_second',filename:'second.csv'}]}]}]}}]);
-  fileCalls++;return fileCalls===1?new Response('a,b\n1,2\n'):new Response('private provider detail',{status:403});
- };
- const response=await call('chat','POST',{model:'gpt-6.1-sol',prompt:'Calculate and create two CSVs.',workspaceMode:'work'});const events=eventsOf(await response.text());assert.ok(events.some(e=>e.type==='done'));const final=events.filter(e=>e.type==='replace').at(-1).text;
- assert.match(final,/The calculation is complete/);assert.doesNotMatch(final,/\/api\/artifacts\/|sandbox:|private provider detail/);assert.equal(fileCalls,2);assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM work_artifacts WHERE user_id=?').get(owner).n,0);assert.equal([...bucket.keys()].filter(key=>key.startsWith(owner+'/artifacts/')).length,0);
+test('failed artifact downloads clean partial files and never reveal private provider errors',async()=>isolated('work-file-failure',async owner=>{
+ const conversationId=crypto.randomUUID();sqlite.prepare('INSERT INTO conversations VALUES (?,?,?,?,?,?,NULL)').run(conversationId,owner,'Saved artifact test','gpt-6.1-sol',Date.now(),Date.now());
+ let fileCalls=0;globalThis.fetch=async()=>{fileCalls++;return fileCalls===1?new Response('a,b\n1,2\n'):new Response('private provider detail',{status:403});};
+ const artifacts=[{containerId:'cntr_failed_download',fileId:'cfile_first',filename:'first.csv'},{containerId:'cntr_failed_download',fileId:'cfile_second',filename:'second.csv'}];
+ await assert.rejects(storeWorkArtifacts(env,env.DB,owner,conversationId,artifacts,new AbortController().signal),error=>/저장하지 못했습니다/.test(error.message)&&!/private provider detail/.test(error.message));
+ assert.equal(fileCalls,2);assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM work_artifacts WHERE user_id=?').get(owner).n,0);assert.equal([...bucket.keys()].filter(key=>key.startsWith(owner+'/artifacts/')).length,0);
+ assert.equal(await billing.balance(env.DB,owner),TEST_CREDIT);
 }));
 
 test('scheduled drafts execute actual chat under their owner and do not enable an unconfigured timer',async()=>isolated('scheduled-owner',async owner=>{
@@ -561,7 +622,7 @@ test('scheduled runner requires its private bearer secret and executes each due 
  for(const headers of [{},{authorization:'Bearer wrong'},{authorization:'Basic '+env.SCHEDULE_RUNNER_SECRET}])assert.equal((await call('tasks/run-due','POST',undefined,headers)).status,401);assert.equal(calls,0);
  const created=await call('tasks','POST',{title:'Once',prompt:'Summarize this task.',timezone:'UTC',recurrence:'once',scheduledAt:Date.now()+60000,enabled:true});assert.equal(created.status,201);const {task}=await created.json();sqlite.prepare('UPDATE scheduled_tasks SET next_run=? WHERE id=?').run(Date.now()-1000,task.id);
  user=null;const ran=await call('tasks/run-due','POST',undefined,{authorization:'Bearer '+env.SCHEDULE_RUNNER_SECRET});assert.equal(ran.status,200);const result=await ran.json();assert.equal(result.completed,1);assert.equal(result.failed,0);assert.equal(calls,1);assert.equal(sqlite.prepare('SELECT user_id FROM conversations WHERE id=?').get(result.results[0].conversationId).user_id,owner);
- const again=await(await call('tasks/run-due','POST',undefined,{authorization:'Bearer '+env.SCHEDULE_RUNNER_SECRET})).json();assert.equal(again.attempted,0);assert.equal(calls,1);
+ const again=await call('tasks/run-due','POST',undefined,{authorization:'Bearer '+env.SCHEDULE_RUNNER_SECRET});assert.equal(again.status,429);assert.equal(calls,1);
 }));
 
 test('browser requests enforce public targets, fixed capture code, and isolated saved results',async()=>isolated('browser-owner',async owner=>{
@@ -575,11 +636,98 @@ test('browser requests enforce public targets, fixed capture code, and isolated 
  assert.equal((await call('browser/sessions','DELETE')).status,200);assert.equal((await call('browser/sessions/'+session.id)).status,404);
 }));
 
-test('free beta streams without a wallet and enforces model, daily and global limits',async()=>{
- env.BETA_MODE='true';env.OPENAI_API_KEY='test-only-key';user={userId:'beta-user',email:'beta@example.test'};
- globalThis.fetch=async(url,options)=>{const body=JSON.parse(options.body);assert.equal(body.max_output_tokens,1024);return mockSSE([{type:'response.output_text.delta',delta:'Live beta answer'},{type:'response.completed',response:{usage:{input_tokens:12,output_tokens:7}}}]);};
- assert.equal((await call('chat','POST',{model:'gpt-6-astra',prompt:'No'})).status,403);
- const r=await call('chat','POST',{model:'gpt-6.1-sol',prompt:'Hello'});assert.equal(r.status,200);assert.match(await r.text(),/Live beta answer/);
+test('first chat stores a short generated title and subsequent turns keep it', async () => isolated('chat-title-owner', async () => {
+ const prompt = '실내에서 바질을 키우려는 초보자를 위해 햇빛, 물주기, 화분 크기를 설명해 주세요.';
+ let titleCalls = 0;
+ globalThis.fetch = async (_url, options) => {
+  const input = JSON.parse(options.body).input.at(-1).content;
+  const isTitle = input.startsWith('Write one short sidebar title');
+  if (isTitle) titleCalls++;
+  return mockSSE([
+   {type:'response.output_text.delta',delta:isTitle ? '실내 바질 재배 방법' : '햇빛이 잘 드는 곳에서 키우세요.'},
+   {type:'response.completed',response:{usage:{input_tokens:30,output_tokens:10}}},
+  ]);
+ };
+ const first = eventsOf(await (await call('chat','POST',{model:'gpt-6.1-sol',prompt,generateTitle:true})).text());
+ const start = first.find(event => event.type === 'start');
+ assert.ok(start.title.endsWith('…'));
+ assert.ok(Array.from(start.title).length <= 32);
+ assert.equal(first.at(-1).title,'실내 바질 재배 방법');
+ assert.equal((await (await call('conversations')).json())[0].title,'실내 바질 재배 방법');
+
+ const second = eventsOf(await (await call('chat','POST',{model:'gpt-6.1-sol',prompt:'물은 얼마나 자주 주나요?',conversationId:start.conversationId,generateTitle:true})).text());
+ assert.equal(second.at(-1).type,'done');
+ assert.equal(titleCalls,1);
+ assert.equal((await (await call('conversations')).json())[0].title,'실내 바질 재배 방법');
+}));
+
+test('title provider failure preserves the successful response and provisional title', async () => isolated('chat-title-failure', async () => {
+ globalThis.fetch = async (_url, options) => {
+  const input = JSON.parse(options.body).input.at(-1).content;
+  if (input.startsWith('Write one short sidebar title')) return new Response(null,{status:429});
+  return mockSSE([
+   {type:'response.output_text.delta',delta:'The response is still available.'},
+   {type:'response.completed',response:{usage:{input_tokens:30,output_tokens:10}}},
+  ]);
+ };
+ const events = eventsOf(await (await call('chat','POST',{model:'gpt-6.1-sol',prompt:'Explain how to repot a small indoor basil plant',generateTitle:true})).text());
+ assert.equal(events.at(-1).type,'done');
+ assert.equal(events.at(-1).title,undefined);
+ assert.equal((await (await call('conversations')).json())[0].title,events[0].title);
+}));
+
+test('requested paid OpenAI models and Pro mode use real payloads and settle the paid wallet',async()=>isolated('premium-models',async owner=>{
+ env.OPENAI_API_KEY='test-only-key';
+ for(const [model,effort,pro] of [['gpt-6.1-sol','xhigh',false],['gpt-6-astra','high',true]]){
+  let seen=false;
+  globalThis.fetch=async(url,options)=>{const body=JSON.parse(options.body);seen=true;
+   assert.equal(body.model,model);assert.equal(body.reasoning.effort,effort);assert.equal(body.reasoning.mode,pro?'pro':undefined);
+   assert.ok(body.max_output_tokens>=1024);assert.ok(body.max_output_tokens<=8192);
+   return mockSSE([{type:'response.output_text.delta',delta:'Premium response'},{type:'response.completed',response:{usage:{input_tokens:20,output_tokens:10}}}]);
+  };
+  const response=await call('chat','POST',{model,prompt:'Briefly explain a rainbow.',effort,pro});assert.equal(response.status,200);
+  assert.equal(eventsOf(await response.text()).at(-1).type,'done');assert.equal(seen,true);
+  const row=sqlite.prepare('SELECT * FROM usage WHERE user_id=? AND model=?').get(owner,model);
+  assert.equal(row.provider,'openai');assert.equal(row.status,'complete');assert.deepEqual(JSON.parse(row.rate_snapshot),{input:1000,output:2000});assert.ok(row.reserved_amount>20*1000+10*2000);
+ }
+ assert.equal(await billing.balance(env.DB,owner),TEST_CREDIT-2*(20*1000+10*2000));
+ let calls=0;globalThis.fetch=async()=>{calls++;throw new Error('must not call');};
+ assert.equal((await call('chat','POST',{model:'gpt-6-astra',prompt:'Hi',effort:'none'})).status,400);
+ env.GEMINI_API_KEY='test-google-key';
+ assert.equal((await call('chat','POST',{model:'gemini-4-argon',prompt:'Hi',pro:true})).status,400);
+ assert.equal((await call('chat','POST',{model:'gpt-6-astra',prompt:'Hi',pro:'true'})).status,400);
+ assert.equal(calls,0);delete env.GEMINI_API_KEY;
+}));
+
+test('Google thinking and Claude Max are forwarded and charged to the correct paid provider',async()=>isolated('provider-levels',async owner=>{
+ env.GEMINI_API_KEY='test-google-key';env.ANTHROPIC_API_KEY='test-claude-key';
+ try{
+  globalThis.fetch=async(url,options)=>{
+   const body=JSON.parse(options.body);
+   if(url.includes('googleapis')){assert.equal(body.generation_config.thinking_level,'high');assert.equal(body.stream,true);return mockSSE([{event_type:'step.delta',index:0,delta:{type:'text',text:'Gemini reply'}},{event_type:'interaction.completed',interaction:{status:'completed',usage:{total_input_tokens:10,total_output_tokens:5,total_thought_tokens:5}}}]);}
+   assert.equal(body.output_config.effort,'max');
+   return mockSSE([{type:'message_start',message:{usage:{input_tokens:10}}},{type:'content_block_delta',delta:{type:'text_delta',text:'Claude reply'}},{type:'message_delta',usage:{output_tokens:10},delta:{stop_reason:'end_turn'}},{type:'message_stop'}]);
+  };
+  for(const [model,effort,provider] of [['gemini-4-argon','high','google'],['claude-fable-5-1','max','anthropic']]){
+   const response=await call('chat','POST',{model,effort,prompt:'Say hello.'});assert.equal(response.status,200);assert.equal(eventsOf(await response.text()).at(-1).type,'done');
+   const used=sqlite.prepare('SELECT provider,input_tokens,output_tokens,status FROM usage WHERE user_id=? AND model=?').get(owner,model);
+   assert.equal(used.provider,provider);assert.equal(used.input_tokens,10);assert.equal(used.output_tokens,10);assert.equal(used.status,'complete');
+  }
+  assert.equal(await billing.balance(env.DB,owner),TEST_CREDIT-2*(10*1000+10*2000));
+ }finally{delete env.GEMINI_API_KEY;delete env.ANTHROPIC_API_KEY;}
+}));
+
+test('paid models reject exhausted credit before provider access even while beta remains active',async()=>isolated('premium-budget',async owner=>{
+ env.OPENAI_API_KEY='test-only-key';let calls=0;globalThis.fetch=async()=>{calls++;throw Error('must not call');};
+ clearWallet(owner);
+ assert.equal((await call('chat','POST',{model:'gpt-6-astra',prompt:'Hi',pro:true})).status,402);assert.equal(calls,0);
+}));
+
+test('free Flash-Lite streams without a wallet and enforces model, daily and global limits',async()=>{
+ env.BETA_MODE='true';env.GEMINI_API_KEY='test-google-key';user={userId:'beta-user',email:'beta@example.test'};
+ globalThis.fetch=async(url,options)=>{const body=JSON.parse(options.body);assert.equal(body.model,DEFAULT_MODEL_ID);assert.equal(body.generation_config.max_output_tokens,8192);return mockSSE([{event_type:'step.delta',delta:{type:'text',text:'Live free answer'}},{event_type:'interaction.completed',interaction:{status:'completed',usage:{total_input_tokens:12,total_output_tokens:7}}}]);};
+ assert.equal((await call('chat','POST',{model:'gpt-6-luna',prompt:'No'})).status,400);
+ const r=await call('chat','POST',{model:DEFAULT_MODEL_ID,prompt:'Hello'});assert.equal(r.status,200);assert.match(await r.text(),/Live free answer/);
  assert.equal(await billing.balance(env.DB,'beta-user'),0);
  const beta=await import(new URL('beta.mjs',dir).href);
  const today=Math.floor(Date.now()/86400000)*86400000;
@@ -587,18 +735,18 @@ test('free beta streams without a wallet and enforces model, daily and global li
  await assert.rejects(()=>beta.reserveBeta(env.DB,'beta-user','blocked',4096,Date.now()),/allowance/);
  sqlite.prepare("INSERT INTO usage (id,user_id,model,provider,status,created_at,rate_snapshot,reserved_amount) VALUES ('global-limit','another','gpt-6.1-sol','openai','error',?,'beta:v1',8000000)").run(today+1);
  await assert.rejects(()=>beta.reserveBeta(env.DB,'new-account','global-blocked',4096,Date.now()),/allowance/);
- delete env.BETA_MODE;delete env.OPENAI_API_KEY;globalThis.fetch=originalFetch;
+ delete env.BETA_MODE;delete env.OPENAI_API_KEY;delete env.GEMINI_API_KEY;globalThis.fetch=originalFetch;
 });
 
 test('health probes check dependencies and every response has a request ID',async()=>{
  user=null;
  assert.equal((await call('health/live')).status,200);
- delete env.OPENAI_API_KEY;
+ delete env.GEMINI_API_KEY;env.OPENAI_API_KEY='test-only-openai-key';
  assert.equal((await call('health/ready')).status,503);
- env.OPENAI_API_KEY='test-only-key';
+ env.GEMINI_API_KEY='test-only-key';
  assert.equal((await call('health/ready')).status,200);
  const denied=await call('conversations');assert.equal(denied.status,401);assert.ok(denied.headers.get('X-Request-ID'));assert.equal(denied.headers.get('Cache-Control'),'no-store');
- delete env.OPENAI_API_KEY;
+ delete env.GEMINI_API_KEY;delete env.OPENAI_API_KEY;
 });
 
 test('guest import requires authentication and rejects cross-origin writes',async()=>{

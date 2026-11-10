@@ -20,7 +20,7 @@
   raster stream must exactly fit the declared dimensions, contain valid filter
   byte values, and pass zlib integrity checks. Expansion is stopped as soon as
   it exceeds that budget. The same check applies to generated PNG output, with
-  a 4,096-pixel per-side ceiling.
+  its existing 4,096-pixel per-side limit.
 - JPEG/WebP checks inspect the entire container and declared frame dimensions,
   including segment/chunk lengths, terminal markers, RIFF length, primary image
   payload, and metadata/part-count ceilings. They do not fully decode pixels.

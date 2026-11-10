@@ -1,0 +1,55 @@
+.prism-thinking-indicator {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 4px 0;
+  color: #c4c7c5;
+  vertical-align: middle;
+}
+
+.prism-thinking-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 16px;
+}
+
+.prism-thinking-dots > i {
+  display: block;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: .45;
+  animation: prism-thinking-dot 1.2s ease-in-out infinite;
+}
+
+.prism-thinking-dots > i:nth-child(2) { animation-delay: .15s; }
+.prism-thinking-dots > i:nth-child(3) { animation-delay: .3s; }
+
+.prism-thinking-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+html[data-theme="light"] .prism-thinking-indicator { color: #5f6368; }
+
+@keyframes prism-thinking-dot {
+  0%, 65%, 100% { transform: translateY(0); opacity: .45; }
+  30% { transform: translateY(-3px); opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .prism-thinking-dots > i { animation: none; opacity: .7; }
+}
+
+@media print {
+  .prism-thinking-indicator { display: none !important; }
+}

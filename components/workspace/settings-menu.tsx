@@ -1,9 +1,9 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { DropdownMenu } from 'radix-ui';
 import {
-  Check, ChevronRight, CircleHelp, Clock3, Diamond, Globe2, History,
+  Check, ChevronRight, CircleHelp, Clock3, Diamond, ExternalLink, Globe2, History,
   Info, Link2, MapPin, MessageSquareWarning, Monitor, Moon, ScrollText,
   Settings, Sparkles, Sun, Upload, UserRoundCog, WandSparkles,
 } from 'lucide-react';
@@ -22,6 +22,8 @@ export function SettingsMenu({ onNavigate, onHelp, signedIn, beta, triggerClassN
   const { theme, setTheme } = useWorkspaceTheme();
   const [location, setLocation] = useState('기기 시간대를 사용합니다.');
   const [locating, setLocating] = useState(false);
+  const openingPointer = useRef<{ id: number; x: number; y: number } | null>(null);
+  const openingRelease = useRef<{ x: number; y: number; time: number } | null>(null);
 
   const detectLocation = () => {
     if (!navigator.geolocation) {
@@ -45,27 +47,62 @@ export function SettingsMenu({ onNavigate, onHelp, signedIn, beta, triggerClassN
   return (
     <DropdownMenu.Root modal={false}>
       <DropdownMenu.Trigger asChild>
-        <button className={`icon-button prism-settings-trigger ${triggerClassName}`} aria-label="설정" title="설정">
+        <button
+          type="button"
+          className={`icon-button prism-settings-trigger ${triggerClassName}`}
+          aria-label="설정"
+          title="설정"
+          onPointerDownCapture={event => {
+            if (event.button !== 0 || event.ctrlKey || event.currentTarget.dataset.state === 'open') return;
+            openingPointer.current = { id: event.pointerId, x: event.clientX, y: event.clientY };
+            openingRelease.current = null;
+          }}
+        >
           <Settings size={18} aria-hidden="true" />
         </button>
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
         <DropdownMenu.Content
           className="prism-settings-menu"
-          side="right"
-          align="end"
-          sideOffset={-34}
-          alignOffset={27}
-          collisionPadding={0}
+          side="top"
+          align="start"
+          sideOffset={8}
+          collisionPadding={8}
           loop
           aria-label="설정 메뉴"
+          onPointerDownCapture={() => {
+            openingPointer.current = null;
+            openingRelease.current = null;
+          }}
+          onPointerUpCapture={event => {
+            const pointer = openingPointer.current;
+            openingPointer.current = null;
+            // Opening on pointer-down must not select an item on release if
+            // viewport collision handling moves the menu under the trigger.
+            if (pointer?.id !== event.pointerId || Math.hypot(event.clientX - pointer.x, event.clientY - pointer.y) > 8) return;
+            openingRelease.current = { x: event.clientX, y: event.clientY, time: event.timeStamp };
+            event.preventDefault();
+            event.stopPropagation();
+          }}
+          onClickCapture={event => {
+            const release = openingRelease.current;
+            openingRelease.current = null;
+            if (!release || event.timeStamp - release.time > 350 || Math.hypot(event.clientX - release.x, event.clientY - release.y) > 8) return;
+            event.preventDefault();
+            event.stopPropagation();
+          }}
         >
           <DropdownMenu.Label className="prism-settings-label">계정</DropdownMenu.Label>
           <DropdownMenu.Item className="prism-settings-item" onSelect={() => onNavigate('/usage')}>
             <Clock3 aria-hidden="true" /><span>사용량 한도</span>
           </DropdownMenu.Item>
           <DropdownMenu.Item className="prism-settings-item" onSelect={() => onNavigate('/billing')}>
-            <Info aria-hidden="true" /><span>{beta ? '무료 베타 이용 안내' : '계정 및 이용 관리'}</span>
+            <Info aria-hidden="true" /><span>충전 및 이용 내역</span>
+          </DropdownMenu.Item>
+          <DropdownMenu.Item className="prism-settings-item" asChild>
+            <a href="/upgrade" target="_blank" rel="noopener noreferrer" aria-label="업그레이드 — 새 탭에서 열기">
+              <Sparkles aria-hidden="true" /><span>업그레이드</span><ExternalLink className="prism-menu-chevron" aria-hidden="true" />
+            </a>
           </DropdownMenu.Item>
           <DropdownMenu.Item className="prism-settings-item" onSelect={() => onNavigate('/models')}>
             <Sparkles aria-hidden="true" /><span>고급 AI 모델 살펴보기</span>

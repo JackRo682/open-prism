@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useRef, type ReactNode } from 'react';
 
-export default function GuestDialog({ title, children, onClose, className = '', returnFocus }: { title: string; children: ReactNode; onClose: () => void; className?: string; returnFocus?: HTMLElement | null }) {
+export default function GuestDialog({ title, children, onClose, className = '', returnFocus, descriptionId }: { title: string; children: ReactNode; onClose: () => void; className?: string; returnFocus?: HTMLElement | null; descriptionId?: string }) {
   const ref = useRef<HTMLDivElement>(null);
   const headingId = useId();
   const closeRef = useRef(onClose);
@@ -26,11 +26,11 @@ export default function GuestDialog({ title, children, onClose, className = '', 
     return () => {
       clearTimeout(timer);
       document.removeEventListener('keydown', onKey);
-      if (previous?.isConnected) previous.focus();
+      if (previous?.isConnected) previous.focus({ preventScroll: true });
     };
   }, []);
   return <div className="pg-overlay" onPointerDown={event => { if (event.target === event.currentTarget) onClose(); }}>
-    <div className={`pg-dialog ${className}`} role="dialog" aria-modal="true" aria-labelledby={headingId} tabIndex={-1} ref={ref}>
+    <div className={`pg-dialog ${className}`} role="dialog" aria-modal="true" aria-labelledby={headingId} aria-describedby={descriptionId} tabIndex={-1} ref={ref}>
       <h2 id={headingId}>{title}</h2>
       {children}
     </div>

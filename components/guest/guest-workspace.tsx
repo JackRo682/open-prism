@@ -1,11 +1,34 @@
 'use client';
+import { isNewChatShortcut } from '../../lib/workspace-navigation';
+import { readChatStream } from '../../lib/chat-stream';
+import { AVAILABLE_CHAT_MODELS, DEFAULT_MODEL_ID, findModel, isFreeModel } from '../../lib/models';
 
-import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
-import { ArrowUp, Check, ChevronDown, ChevronRight, Copy, Download, FilePlus2, HelpCircle, ImagePlus, LoaderCircle, LockKeyhole, Menu, Mic, Moon, MoreHorizontal, Pencil, Plus, RefreshCw, Settings, Sparkles, Square, SquarePen, Sun, X } from 'lucide-react';
+import { lazy, useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { usePathname } from 'next/navigation';
+import { useCopyFeedback } from '../../hooks/use-copy-feedback';
+import { useShellPerformance } from '../../hooks/use-shell-performance';
+import { useStaticAssetCache } from '../../hooks/use-static-asset-cache';
+import { PrismMark } from '../brand/prism-mark';
+import { ArrowUp, Check, ChevronRight, Copy, Download, FilePlus2, HelpCircle, ImagePlus, LoaderCircle, LockKeyhole, Menu, Mic, Moon, PanelLeftClose, PanelLeftOpen, Pencil, Plus, RefreshCw, Settings, Sparkles, Square, SquarePen, Sun, X } from 'lucide-react';
 import { useWorkspaceTheme, type ThemePreference } from '../workspace/theme';
 import { readGuestSession, writeGuestSession, type GuestMessage, type GuestSession } from '../../lib/guest-session';
+import { advanceGuestSignInReminder, guestSignInReminderReason, markGuestSignInReminderShown, readGuestSignInReminder, writeGuestSignInReminder, type GuestSignInReminderReason, type GuestSignInReminderState } from '../../lib/guest-signin-reminder';
+import { conversationMarkdown } from '../../lib/conversation-export';
+import { ConversationActions } from '../workspace/conversation-actions';
+import { ResponseActions, type RegenerateStyle, type ResponseFeedback } from '../workspace/response-actions';
+import { ThinkingIndicator } from '../workspace/thinking-indicator';
+import { useWelcomeIntro } from '../workspace/welcome-intro';
+import type { DetailTarget, ExportTarget } from '../workspace/conversation-tools';
+import { DeferredPanel } from '../workspace/deferred-panel';
 import GuestMarkdown from './guest-markdown';
 import GuestDialog from './guest-dialog';
+import GuestSignInDialog from './guest-signin-dialog';
+import { GuestModelPicker } from './guest-model-picker';
+import CollapsiblePrompt from '../chat/collapsible-prompt';
+
+const ExportDialog = lazy(() => import('../workspace/conversation-tools').then(module => ({ default: module.ExportDialog })));
+const ResponseDetailsDialog = lazy(() => import('../workspace/conversation-tools').then(module => ({ default: module.ResponseDetailsDialog })));
+const LegalReportDialog = lazy(() => import('../workspace/conversation-tools').then(module => ({ default: module.LegalReportDialog })));
 
 type Bootstrap = {
   available: boolean;
@@ -19,13 +42,14 @@ type Bootstrap = {
   code?: string;
   error?: string;
 };
-type Popup = 'tools' | 'model' | 'settings' | 'theme' | `response-${string}` | null;
-type Modal = 'new-chat' | 'install' | null;
+type Popup = 'tools' | 'model' | 'settings' | 'theme' | null;
+type Modal = 'new-chat' | 'delete-chat' | 'rename-chat' | 'pin-chat' | 'install' | 'sign-in' | null;
 type InstallEvent = Event & { prompt(): Promise<void>; userChoice: Promise<{ outcome: string }> };
 type SpeechResultEvent = { results: { [index: number]: { [index: number]: { transcript: string }; isFinal: boolean }; length: number }; resultIndex: number };
 type SpeechRecognizer = { lang: string; continuous: boolean; interimResults: boolean; onresult: ((event: SpeechResultEvent) => void) | null; onerror: ((event: { error: string }) => void) | null; onend: (() => void) | null; start(): void; stop(): void; abort(): void };
 
-const DEFAULT_MODEL = 'GPT-6.1 Sol';
+const DEFAULT_MODEL = findModel(DEFAULT_MODEL_ID)!.name;
+const RESPONSE_COMPLETE_ANNOUNCEMENT = '답변이 완료되었습니다.';
 const bytes = (value: string) => new TextEncoder().encode(value).length;
 function newId(): string {
   if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
@@ -34,11 +58,6 @@ function newId(): string {
   random[8] = (random[8] & 0x3f) | 0x80;
   const hex = [...random].map(value => value.toString(16).padStart(2, '0')).join('');
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-}
-
-function PrismMark({ size = 24 }: { size?: number }) {
-  const id = useId();
-  return <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true"><defs><linearGradient id={id} x1="3" y1="2" x2="21" y2="22" gradientUnits="userSpaceOnUse"><stop stopColor="#75adff"/><stop offset=".34" stopColor="#a789f5"/><stop offset=".61" stopColor="#f3b8d0"/><stop offset=".84" stopColor="#e0cf8a"/><stop offset="1" stopColor="#70c7a1"/></linearGradient></defs><path d="M12 1.5C13.5 7.8 16.2 10.5 22.5 12C16.2 13.5 13.5 16.2 12 22.5C10.5 16.2 7.8 13.5 1.5 12C7.8 10.5 10.5 7.8 12 1.5Z" fill={`url(#${id})`}/></svg>;
 }
 
 function boundedHistory(messages: GuestMessage[], prompt: string, bootstrap: Bootstrap) {
@@ -53,10 +72,20 @@ function boundedHistory(messages: GuestMessage[], prompt: string, bootstrap: Boo
 }
 
 export default function GuestWorkspace({ signInHref = '/signin-with-chatgpt?return_to=%2Fchat' }: { signInHref?: string }) {
+  useShellPerformance();
+  useStaticAssetCache();
+  const pathname = usePathname();
   const { theme, setTheme } = useWorkspaceTheme();
   const [messages, setMessages] = useState<GuestMessage[]>([]);
   const [draft, setDraft] = useState('');
   const [sessionId, setSessionId] = useState('');
+  const [sessionTitle, setSessionTitle] = useState('');
+  const [renameDraft, setRenameDraft] = useState('');
+  const [renameError, setRenameError] = useState('');
+  const [pdfBusy, setPdfBusy] = useState(false);
+  const [exportTarget, setExportTarget] = useState<ExportTarget | null>(null);
+  const [detailTarget, setDetailTarget] = useState<DetailTarget | null>(null);
+  const [reportTarget, setReportTarget] = useState<DetailTarget | null>(null);
   const [ready, setReady] = useState(false);
   const [hasInteracted, setHasInteracted] = useState(false);
   const [bootstrap, setBootstrap] = useState<Bootstrap | null>(null);
@@ -65,12 +94,16 @@ export default function GuestWorkspace({ signInHref = '/signin-with-chatgpt?retu
   const [streaming, setStreaming] = useState(false);
   const [popup, setPopup] = useState<Popup>(null);
   const [modal, setModal] = useState<Modal>(null);
+  const [signInReminder, setSignInReminder] = useState<GuestSignInReminderState | null>(null);
+  const [signInReason, setSignInReason] = useState<GuestSignInReminderReason>('encouragement');
   const [drawer, setDrawer] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const [editing, setEditing] = useState<number | null>(null);
   const [composerError, setComposerError] = useState('');
   const [announcement, setAnnouncement] = useState('');
+  const { copy: copyText, isCopied, copyNotice, copyNoticeKey, resetCopyFeedback } = useCopyFeedback(sessionId, setAnnouncement, id => messages.find(message => message.id === id)?.content);
+  const toastNotice = copyNotice || (announcement === RESPONSE_COMPLETE_ANNOUNCEMENT ? '' : announcement);
   const [installEvent, setInstallEvent] = useState<InstallEvent | null>(null);
   const [installMessage, setInstallMessage] = useState('');
   const [listening, setListening] = useState(false);
@@ -78,6 +111,8 @@ export default function GuestWorkspace({ signInHref = '/signin-with-chatgpt?retu
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const drawerRef = useRef<HTMLElement>(null);
+  const desktopMenuRef = useRef<HTMLButtonElement>(null);
+  const desktopCollapseRef = useRef<HTMLButtonElement>(null);
   const popupTrigger = useRef<HTMLElement | null>(null);
   const dialogTrigger = useRef<HTMLElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -88,12 +123,26 @@ export default function GuestWorkspace({ signInHref = '/signin-with-chatgpt?retu
   const nearBottomRef = useRef(true);
   const messagesRef = useRef(messages);
   const surfaceRef = useRef({ popup, modal });
+  const newChatAction = useRef(requestNewChat);
+  newChatAction.current = requestNewChat;
   surfaceRef.current = { popup, modal };
   messagesRef.current = messages;
   const empty = messages.length === 0;
+  const welcomePhase = useWelcomeIntro({ active: empty, ready });
+  const conversationTitle = sessionTitle || messages.find(message => message.role === 'user')?.content.replace(/\s+/g, ' ').slice(0, 80) || '새 채팅';
+  const lastAssistantIndex = messages.findLastIndex(message => message.role === 'assistant');
   const modelName = bootstrap?.model.name || DEFAULT_MODEL;
   const unavailable = !bootstrap?.available || bootstrap.remaining <= 0;
   const canSubmit = ready && !bootLoading && !unavailable && !!draft.trim() && !streaming;
+
+  useEffect(() => {
+    const shortcut = (event: KeyboardEvent) => {
+      if (!isNewChatShortcut(event)) return;
+      event.preventDefault(); event.stopPropagation(); newChatAction.current();
+    };
+    window.addEventListener('keydown', shortcut, true);
+    return () => window.removeEventListener('keydown', shortcut, true);
+  }, []);
 
   const loadBootstrap = useCallback(async (signal?: AbortSignal) => {
     setBootLoading(true);
@@ -116,8 +165,10 @@ export default function GuestWorkspace({ signInHref = '/signin-with-chatgpt?retu
   useEffect(() => {
     mountedRef.current = true;
     const restored = readGuestSession();
+    const completedPromptIds = (restored?.messages || []).filter((message, index, history) => message.role === 'user' && history[index + 1]?.role === 'assistant' && history[index + 1]?.status === 'complete' && history[index + 1]?.content.trim()).map(message => message.id);
+    setSignInReminder(readGuestSignInReminder(completedPromptIds));
     setSessionId(restored?.id || newId());
-    if (restored) { setMessages(restored.messages); setDraft(restored.draft); setHasInteracted(restored.hasInteracted); }
+    if (restored) { setMessages(restored.messages); setDraft(restored.draft); setHasInteracted(restored.hasInteracted); setSessionTitle(restored.title || ''); }
     setReady(true);
     const controller = new AbortController();
     void loadBootstrap(controller.signal);
@@ -141,8 +192,26 @@ export default function GuestWorkspace({ signInHref = '/signin-with-chatgpt?retu
 
   useEffect(() => {
     if (!ready || !sessionId) return;
-    writeGuestSession({ id: sessionId, messages, draft, savedAt: Date.now(), hasInteracted });
-  }, [ready, sessionId, messages, draft, hasInteracted]);
+    writeGuestSession({ id: sessionId, messages, draft, savedAt: Date.now(), hasInteracted, title: sessionTitle });
+  }, [ready, sessionId, messages, draft, hasInteracted, sessionTitle]);
+
+  useEffect(() => {
+    if (signInReminder) writeGuestSignInReminder(signInReminder);
+  }, [signInReminder]);
+
+  useEffect(() => {
+    if (!ready || bootLoading || streaming || listening || modal || drawer || popup || exportTarget || detailTarget || reportTarget || !signInReminder) return;
+    const reason = guestSignInReminderReason(signInReminder, bootstrap);
+    if (!reason) return;
+    const next = markGuestSignInReminderShown(signInReminder, reason);
+    // Persist when displayed, so a refresh or new chat cannot immediately repeat it.
+    writeGuestSignInReminder(next);
+    setSignInReminder(next);
+    dialogTrigger.current = inputRef.current;
+    inputRef.current?.blur();
+    setSignInReason(reason);
+    setModal('sign-in');
+  }, [ready, bootLoading, streaming, listening, modal, drawer, popup, exportTarget, detailTarget, reportTarget, signInReminder, bootstrap]);
 
   useEffect(() => {
     const input = inputRef.current;
@@ -160,7 +229,8 @@ export default function GuestWorkspace({ signInHref = '/signin-with-chatgpt?retu
   }, [announcement]);
 
   useEffect(() => {
-    if (!popup) return;
+    // The model picker owns its positioned portal and keyboard lifecycle.
+    if (!popup || popup === 'model') return;
     const visibleMenu = () => [...(rootRef.current?.querySelectorAll<HTMLElement>('.pg-popover') || [])].find(menu => menu.getClientRects().length > 0);
     const placeMenu = () => {
       const menu = visibleMenu();
@@ -172,7 +242,7 @@ export default function GuestWorkspace({ signInHref = '/signin-with-chatgpt?retu
       const below = window.innerHeight - anchor.bottom - 16;
       const above = anchor.top - 16;
       const headerMenu = trigger.closest('.pg-mobile-model-anchor');
-      const preferBelow = headerMenu || (empty && trigger.closest('.pg-composer')) || trigger.closest('.pg-response-menu-anchor');
+      const preferBelow = headerMenu || (empty && trigger.closest('.pg-composer'));
       const opensBelow = headerMenu || (preferBelow ? below >= menuSize.height || below > above : above < menuSize.height && below > above);
       const available = opensBelow ? below : above;
       menu.style.position = 'fixed';
@@ -231,6 +301,12 @@ export default function GuestWorkspace({ signInHref = '/signin-with-chatgpt?retu
     setPopup(current => current === next ? null : next);
   }
 
+  function toggleDesktopSidebar(next: boolean) {
+    setPopup(null);
+    setCollapsed(next);
+    requestAnimationFrame(() => (next ? desktopMenuRef.current : desktopCollapseRef.current)?.focus());
+  }
+
   function rememberSignIn() {
     speechRef.current?.abort(); speechRef.current = null; setListening(false);
     const interrupted = streamingRef.current;
@@ -238,7 +314,7 @@ export default function GuestWorkspace({ signInHref = '/signin-with-chatgpt?retu
     const latestQuestion = [...currentMessages].reverse().find(message => message.role === 'user');
     const resumedDraft = draft.trim() ? draft : interrupted ? latestQuestion?.content || '' : draft;
     if (interrupted) stop();
-    const snapshot: GuestSession = { id: sessionId, messages: currentMessages, draft: resumedDraft, hasInteracted, savedAt: Date.now() };
+    const snapshot: GuestSession = { id: sessionId, messages: currentMessages, draft: resumedDraft, hasInteracted, savedAt: Date.now(), title: sessionTitle };
     if (sessionId) writeGuestSession(snapshot);
     setDraft(resumedDraft);
     try {
@@ -260,15 +336,16 @@ export default function GuestWorkspace({ signInHref = '/signin-with-chatgpt?retu
     setAnnouncement('답변 생성을 중지했습니다.');
   }
 
-  async function sendPrompt(value: string, retryUserIndex?: number) {
+  async function sendPrompt(value: string, retryUserIndex?: number, regenerateStyle?: RegenerateStyle) {
     const prompt = value.trim();
     if (!prompt || streamingRef.current || !bootstrap?.available || bootstrap.remaining <= 0) return;
     if (bytes(prompt) > bootstrap.maxPromptBytes) { setComposerError(`메시지가 너무 깁니다. ${bootstrap.maxPromptBytes.toLocaleString()}바이트 이내로 줄여 주세요.`); inputRef.current?.focus(); return; }
     const original = messagesRef.current;
     const truncateAt = retryUserIndex ?? editing;
+    const isNewPrompt = retryUserIndex === undefined && editing === null;
     const prefix = (truncateAt === null || truncateAt === undefined ? original : original.slice(0, truncateAt)).slice(-38);
     const history = boundedHistory(prefix, prompt, bootstrap);
-    const user: GuestMessage = retryUserIndex !== undefined ? original[retryUserIndex] : { id: newId(), role: 'user', content: prompt, status: 'complete' };
+    const user: GuestMessage = retryUserIndex !== undefined ? original[retryUserIndex] : { id: newId(), role: 'user', content: prompt, status: 'complete', created_at: Date.now() };
     if (!user || user.role !== 'user') return;
     const answerId = newId();
     const requestId = newId();
@@ -278,7 +355,8 @@ export default function GuestWorkspace({ signInHref = '/signin-with-chatgpt?retu
     abortRef.current = controller;
     streamingRef.current = true;
     nearBottomRef.current = true;
-    setMessages([...prefix, user, { id: answerId, role: 'assistant', content: '', status: 'streaming' }]);
+    let responseModel = bootstrap.model.id;
+    setMessages([...prefix, user, { id: answerId, role: 'assistant', content: '', status: 'streaming', model: responseModel, created_at: Date.now() }]);
     if (retryUserIndex === undefined) setDraft('');
     setEditing(null); setComposerError(''); setPopup(null); setStreaming(true);
     let content = '';
@@ -287,10 +365,10 @@ export default function GuestWorkspace({ signInHref = '/signin-with-chatgpt?retu
     const timer = setTimeout(() => { timedOut = true; controller.abort(); }, 125000);
     const current = () => mountedRef.current && epochRef.current === epoch;
     const update = (status: GuestMessage['status'], error?: string) => {
-      if (current()) setMessages(previous => previous.map(message => message.id === answerId ? { ...message, content, status, ...(error ? { error } : {}) } : message));
+      if (current()) setMessages(previous => previous.map(message => message.id === answerId ? { ...message, content, status, model: responseModel, ...(error ? { error } : {}) } : message));
     };
     try {
-      const response = await fetch('/api/guest/chat', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' }, signal: controller.signal, body: JSON.stringify({ requestId, prompt, history }) });
+      const response = await fetch('/api/guest/chat', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' }, signal: controller.signal, body: JSON.stringify({ requestId, prompt, history, ...(retryUserIndex !== undefined && regenerateStyle ? { regenerateStyle } : {}) }) });
       if (!response.ok) {
         const failure = await response.json().catch(() => ({})) as { error?: string; code?: string; remaining?: number };
         if (current() && typeof failure.remaining === 'number') setBootstrap(previous => previous ? { ...previous, remaining: failure.remaining! } : previous);
@@ -298,31 +376,18 @@ export default function GuestWorkspace({ signInHref = '/signin-with-chatgpt?retu
         if (failure.code === 'GUEST_SITE_LIMIT' && current()) { setBootstrap(previous => previous ? { ...previous, available: false, remaining: 0, error: failure.error, resetsAt: null } : previous); setBootError(failure.error || '현재 체험 서비스를 이용할 수 없습니다.'); }
         throw new Error(failure.error || '답변을 가져올 수 없습니다. 잠시 후 다시 시도해 주세요.');
       }
-      if (!response.body || !response.headers.get('content-type')?.includes('text/event-stream')) throw new Error('응답 연결이 올바르지 않습니다. 다시 시도해 주세요.');
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-      const event = (block: string) => {
-        const data = block.split('\n').filter(line => line.startsWith('data:')).map(line => line.slice(5).trimStart()).join('\n');
-        if (!data || !current()) return;
-        let message: { type?: string; text?: string; remaining?: number; error?: string };
-        try { message = JSON.parse(data); } catch { throw new Error('답변을 읽지 못했습니다. 다시 시도해 주세요.'); }
-        if (typeof message.remaining === 'number') setBootstrap(previous => previous ? { ...previous, remaining: message.remaining! } : previous);
+      await readChatStream(response, { signal: controller.signal, onEvent: message => {
+        if (!current()) return;
+        if ((message.type === 'start' || message.type === 'done') && typeof message.model === 'string' && message.model.length <= 120) responseModel = message.model;
+        if (typeof message.remaining === 'number') setBootstrap(previous => previous ? { ...previous, remaining: message.remaining } : previous);
         if (message.type === 'delta' && typeof message.text === 'string') { content = (content + message.text).slice(0, 32000); update('streaming'); }
+        if (message.type === 'replace' && typeof message.text === 'string') { content = message.text.slice(0, 32000); update('streaming'); }
         if (message.type === 'done') done = true;
-        if (message.type === 'error') throw new Error(message.error || '답변 생성이 중단되었습니다. 다시 시도해 주세요.');
-      };
-      while (true) {
-        const chunk = await reader.read();
-        buffer = (buffer + decoder.decode(chunk.value, { stream: !chunk.done })).replace(/\r\n/g, '\n');
-        let separator = buffer.indexOf('\n\n');
-        while (separator !== -1) { event(buffer.slice(0, separator)); buffer = buffer.slice(separator + 2); separator = buffer.indexOf('\n\n'); }
-        if (chunk.done) { if (buffer.trim()) event(buffer); break; }
-        if (!current()) { await reader.cancel(); break; }
-      }
+      } });
       if (current()) {
         if (!done || !content.trim()) throw new Error('답변 연결이 끊어졌습니다. 다시 시도해 주세요.');
-        update('complete'); setHasInteracted(true); setAnnouncement('답변이 완료되었습니다.');
+        update('complete'); setHasInteracted(true); setAnnouncement(RESPONSE_COMPLETE_ANNOUNCEMENT);
+        setSignInReminder(previous => advanceGuestSignInReminder(previous || readGuestSignInReminder(), { promptId: user.id, status: 'complete', isNewPrompt }));
       }
     } catch (error) {
       if (current()) {
@@ -341,17 +406,65 @@ export default function GuestWorkspace({ signInHref = '/signin-with-chatgpt?retu
     if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) { event.preventDefault(); submit(); }
   }
   function openModal(next: Modal) { dialogTrigger.current = document.activeElement as HTMLElement | null; setModal(next); }
-  function requestNewChat() { if (!empty && !streaming) { setPopup(null); openModal('new-chat'); } }
+  function requestNewChat() {
+    if (modal || exportTarget || detailTarget || reportTarget) return;
+    setPopup(null);
+    if (!empty || draft.trim()) openModal('new-chat');
+    else clearChat();
+  }
   function clearChat() {
+    resetCopyFeedback();
+    setHasInteracted(false); setAnnouncement('');
     epochRef.current++;
+    abortRef.current?.abort(); abortRef.current = null;
+    streamingRef.current = false; setStreaming(false);
     speechRef.current?.abort(); speechRef.current = null; setListening(false);
-    setMessages([]); setDraft(''); setEditing(null); setComposerError(''); setSessionId(newId()); setModal(null); setDrawer(false);
+    setMessages([]); setDraft(''); setEditing(null); setComposerError(''); setSessionId(newId()); setSessionTitle(''); setModal(null); setDrawer(false); setPopup(null); setExportTarget(null); setDetailTarget(null); setReportTarget(null);
+    if (window.location.pathname !== '/chat') window.history.pushState(window.history.state, '', '/chat');
     setTimeout(() => inputRef.current?.focus(), 0);
   }
-  async function copy(text: string) {
-    try { await navigator.clipboard.writeText(text); setAnnouncement('복사했습니다.'); }
-    catch { setAnnouncement('복사하지 못했습니다. 텍스트를 선택해 복사해 주세요.'); }
+  async function copy(message: GuestMessage) {
     setPopup(null);
+    await copyText(message.id, message.content, message.role === 'user' ? '프롬프트가 복사되었습니다.' : '대화가 복사되었습니다.');
+  }
+  function setFeedback(messageId: string, feedback: ResponseFeedback, details?: string) {
+    const target = messagesRef.current.find(message => message.id === messageId && message.role === 'assistant' && message.status === 'complete');
+    if (!target) return;
+    const feedbackDetails = feedback === 'down' && details?.trim() ? details.trim().slice(0, 2000) : undefined;
+    const next = messagesRef.current.map(message => message.id === messageId ? { ...message, feedback, feedbackDetails } : message);
+    const saved = writeGuestSession({ id: sessionId, messages: next, draft, hasInteracted, title: sessionTitle, savedAt: Date.now() });
+    if (!saved) throw new Error('이 브라우저에 의견을 저장하지 못했습니다. 브라우저 저장소 설정을 확인해 주세요.');
+    setMessages(current => current.map(message => message.id === messageId ? { ...message, feedback, feedbackDetails } : message));
+    setAnnouncement(feedback ? '이 브라우저에 의견을 저장했습니다.' : '의견 선택을 해제했습니다.');
+  }
+  function responseDetails(message: GuestMessage): DetailTarget {
+    return { id: message.id, content: message.content, ...(message.model ? { model: message.model } : {}), ...(message.created_at ? { created_at: message.created_at } : {}) };
+  }
+  function exportResponse(message: GuestMessage, kind: ExportTarget['kind']) {
+    setPopup(null);
+    setExportTarget({ title: conversationTitle, content: message.content, kind });
+  }
+  function renameChat(event: React.FormEvent) {
+    event.preventDefault();
+    const title = renameDraft.trim().slice(0, 120);
+    if (!title) { setRenameError('대화 이름을 입력해 주세요.'); return; }
+    if (!writeGuestSession({ id: sessionId, messages: messagesRef.current, draft, hasInteracted, title, savedAt: Date.now() })) {
+      setRenameError('이 브라우저에 이름을 저장하지 못했습니다. 브라우저 저장소 설정을 확인해 주세요.');
+      return;
+    }
+    setSessionTitle(title); setModal(null); setAnnouncement('이 브라우저에서 대화 이름을 변경했습니다.');
+  }
+  async function downloadPdf() {
+    if (pdfBusy || streaming) return;
+    const snapshot = { title: conversationTitle, messages: messagesRef.current };
+    setPdfBusy(true);
+    try {
+      const { downloadConversationPdf } = await import('../../lib/print-conversation');
+      if (!mountedRef.current) return;
+      await downloadConversationPdf(snapshot);
+    }
+    catch (error) { if (mountedRef.current) setAnnouncement(error instanceof Error ? error.message : 'PDF를 만들지 못했습니다. 다시 시도해 주세요.'); }
+    finally { if (mountedRef.current) setPdfBusy(false); }
   }
   function edit(index: number) { setDraft(messages[index].content); setEditing(index); setComposerError(''); setTimeout(() => inputRef.current?.focus(), 0); }
   async function install() {
@@ -377,13 +490,20 @@ export default function GuestWorkspace({ signInHref = '/signin-with-chatgpt?retu
     try { setComposerError(''); recognition.start(); setListening(true); } catch { setComposerError('음성 입력을 시작하지 못했습니다.'); }
   }
 
-  function modelMenu() {
-    return <div className="pg-popover pg-model-menu" role="menu" aria-label="모델 선택">
-      <div className="pg-menu-heading">모델</div>
-      <button type="button" className="pg-model-option" role="menuitemradio" aria-checked="true" onClick={() => { setPopup(null); popupTrigger.current?.focus(); }}><span><strong>{modelName}</strong><small>로그인 없이 체험</small></span><Check size={18}/></button>
-      {[['GPT-6 Astra', '추론'], ['Claude Fable 5.1', '글쓰기와 코딩'], ['Gemini 4 Argon', '긴 문서 이해']].map(([name, description]) => <a key={name} href={signInHref} target="_top" role="menuitem" className="pg-model-option pg-model-locked" onClick={rememberSignIn}><span><strong>{name}</strong><small>{description} · 로그인 후 연결 상태 확인</small></span><LockKeyhole size={15}/></a>)}
-      {signIn('pg-menu-signin', '로그인 후 모델 연결 확인', true)}
-    </div>;
+  function modelPicker(mobile: boolean) {
+    return <GuestModelPicker
+      modelName={modelName}
+      triggerLabel="Flash-Lite"
+      freeDescription="무료 · 로그인 전후 이용 가능"
+      lockedModels={AVAILABLE_CHAT_MODELS.filter(model => !isFreeModel(model.id)).map(model => ({ id: model.id, name: model.name, description: '유료 · 로그인 후 크레딧 충전 필요' }))}
+      open={popup === 'model' && mobile === isMobile}
+      onOpenChange={open => setPopup(current => open ? 'model' : current === 'model' ? null : current)}
+      signInHref={signInHref}
+      onSignIn={rememberSignIn}
+      container={rootRef.current}
+      mobile={mobile}
+      empty={empty}
+    />;
   }
 
   function settingsMenu() {
@@ -402,50 +522,88 @@ export default function GuestWorkspace({ signInHref = '/signin-with-chatgpt?retu
   }
 
   const sidebarContent = <>
-    <div className="pg-sidebar-brand"><a href="/" aria-label="OpenPrism 홈"><PrismMark/><span>OpenPrism</span></a><button className="pg-icon-button pg-collapse-button" type="button" onClick={() => setCollapsed(true)} aria-label="사이드바 접기"><Menu size={19}/></button><button className="pg-icon-button pg-drawer-close" type="button" data-drawer-close onClick={() => setDrawer(false)} aria-label="메뉴 닫기"><X size={20}/></button></div>
-    <div className="pg-sidebar-top"><button className="pg-sidebar-row" type="button" disabled={empty || streaming} onClick={requestNewChat}><SquarePen size={18}/><span>새 채팅</span></button><a className="pg-sidebar-row" href={signInHref} target="_top" onClick={rememberSignIn}><ImagePlus size={18}/><span>이미지 생성</span><LockKeyhole size={13} className="pg-trailing-icon"/></a><p className="pg-sidebar-note">로그인하면 대화를 저장하고<br/>더 많은 기능을 사용할 수 있어요.</p></div>
-    <div className="pg-sidebar-bottom"><a className="pg-sidebar-row" href="/about"><Sparkles size={17}/><span>OpenPrism 소개</span></a><a className="pg-sidebar-row" href="/faq"><HelpCircle size={17}/><span>자주 묻는 질문</span></a><div className="pg-settings-anchor"><button className="pg-sidebar-row" type="button" data-popup-trigger aria-haspopup="menu" aria-expanded={popup === 'settings' || popup === 'theme'} onClick={event => togglePopup('settings', event.currentTarget)}><Settings size={17}/><span>설정 및 도움말</span></button>{(popup === 'settings' || popup === 'theme') && settingsMenu()}</div>{signIn('pg-sidebar-signin')}<button className="pg-sidebar-install" type="button" onClick={() => { setPopup(null); openModal('install'); }}><Download size={16}/>앱 다운로드</button></div>
+    <div className="pg-sidebar-brand"><a href="/" aria-label="Prism 홈"><PrismMark/><span>Prism</span></a><button ref={isMobile ? undefined : desktopCollapseRef} className="pg-icon-button pg-collapse-button" type="button" onClick={() => toggleDesktopSidebar(true)} aria-label="사이드바 접기" aria-controls="pg-desktop-sidebar" aria-expanded={!collapsed}><PanelLeftClose size={19}/></button><button className="pg-icon-button pg-drawer-close" type="button" data-drawer-close onClick={() => setDrawer(false)} aria-label="메뉴 닫기"><X size={20}/></button></div>
+    <div className="pg-sidebar-top"><button className="pg-sidebar-row" type="button" disabled={empty && !draft.trim()} onClick={requestNewChat} title="새 채팅 (Ctrl+Shift+O)" aria-keyshortcuts="Control+Shift+O Meta+Shift+O"><SquarePen size={18}/><span>새 채팅</span></button><a className="pg-sidebar-row" href={signInHref} target="_top" onClick={rememberSignIn}><ImagePlus size={18}/><span>이미지 생성</span><LockKeyhole size={13} className="pg-trailing-icon"/></a><p className="pg-sidebar-note">로그인하면 대화를 저장하고<br/>더 많은 기능을 사용할 수 있어요.</p></div>
+    <div className="pg-sidebar-bottom"><a className="pg-sidebar-row pg-mobile-info-link" href="/about"><Sparkles size={17}/><span>OpenPrism 소개</span></a><a className="pg-sidebar-row pg-mobile-info-link" href="/faq"><HelpCircle size={17}/><span>자주 묻는 질문</span></a><div className="pg-settings-anchor"><button className="pg-sidebar-row" type="button" data-popup-trigger aria-haspopup="menu" aria-expanded={popup === 'settings' || popup === 'theme'} onClick={event => togglePopup('settings', event.currentTarget)}><Settings size={17}/><span>설정 및 도움말</span></button>{(popup === 'settings' || popup === 'theme') && settingsMenu()}</div>{signIn('pg-sidebar-signin')}<button className="pg-sidebar-install" type="button" onClick={() => { setPopup(null); openModal('install'); }}><Download size={16}/>앱 다운로드</button></div>
   </>;
 
   return <div ref={rootRef} className={`prism-guest ${empty ? 'pg-is-empty' : 'pg-has-chat'} ${collapsed ? 'pg-is-collapsed' : ''}`}>
     <a className="pg-skip-link" href="#pg-prompt">메시지 입력으로 이동</a>
-    <aside className="pg-sidebar" aria-label="주 탐색" inert={drawer || modal ? true : undefined}>{sidebarContent}</aside>
+    <aside id="pg-desktop-sidebar" className="pg-sidebar" aria-label="주 탐색" aria-hidden={collapsed && !isMobile ? true : undefined} inert={drawer || modal || (collapsed && !isMobile) ? true : undefined}><div className="pg-sidebar-content">{sidebarContent}</div></aside>
     {drawer && <div className="pg-drawer-backdrop" onPointerDown={event => { if (event.target === event.currentTarget) setDrawer(false); }}><aside ref={drawerRef} className="pg-drawer" inert={modal ? true : undefined} role="dialog" aria-modal="true" aria-label="주 메뉴">{sidebarContent}</aside></div>}
-    <div className="pg-main" inert={drawer || modal ? true : undefined}>
+    <div className="pg-main" data-welcome-phase={welcomePhase} inert={drawer || modal ? true : undefined}>
       <header className="pg-header">
-        <div className="pg-header-start"><button type="button" className="pg-icon-button pg-mobile-menu" aria-label="메뉴 열기" aria-expanded={drawer} onClick={() => setDrawer(true)}><Menu size={22}/></button>{collapsed && <button type="button" className="pg-icon-button pg-desktop-menu" aria-label="사이드바 펼치기" onClick={() => setCollapsed(false)}><Menu size={22}/></button>}<a className="pg-header-brand" href="/" aria-label="OpenPrism 홈"><PrismMark/><span>OpenPrism</span></a><div className="pg-mobile-model-anchor"><button type="button" className="pg-model-trigger" data-popup-trigger aria-haspopup="menu" aria-expanded={popup === 'model'} onClick={event => togglePopup('model', event.currentTarget)}><span>{modelName}</span><ChevronDown size={14}/></button>{popup === 'model' && isMobile && modelMenu()}</div></div>
-        <div className="pg-header-actions"><button type="button" className="pg-icon-button pg-mobile-new" disabled={empty || streaming} onClick={requestNewChat} aria-label="새 채팅"><SquarePen size={20}/></button>{empty && <button type="button" className="pg-header-download" onClick={() => openModal('install')}><Download size={16}/>앱 다운로드</button>}{signIn('pg-signin-button')}</div>
+        <div className="pg-header-start"><button type="button" className="pg-icon-button pg-mobile-menu" aria-label="메뉴 열기" aria-expanded={drawer} onClick={() => setDrawer(true)}><Menu size={22}/></button><button ref={desktopMenuRef} type="button" className="pg-icon-button pg-desktop-menu" aria-label="사이드바 펼치기" aria-controls="pg-desktop-sidebar" aria-expanded={!collapsed} aria-hidden={!collapsed} tabIndex={collapsed ? 0 : -1} onClick={() => toggleDesktopSidebar(false)}><PanelLeftOpen size={22}/></button><a className="pg-header-brand" href="/" aria-label="Prism 홈" aria-hidden={!collapsed} tabIndex={collapsed ? 0 : -1}><PrismMark/><span>Prism</span></a><div className="pg-mobile-model-anchor">{modelPicker(true)}</div></div>
+        <div className="pg-header-actions">
+          <nav className="pg-header-links" aria-label="OpenPrism 안내"><a href="/about">OpenPrism 소개</a><a href="/faq">자주 묻는 질문</a></nav>
+          <button type="button" className="pg-icon-button pg-mobile-new" disabled={empty && !draft.trim()} onClick={requestNewChat} title="새 채팅 (Ctrl+Shift+O)" aria-keyshortcuts="Control+Shift+O Meta+Shift+O" aria-label="새 채팅"><SquarePen size={20}/></button>
+          {!empty && <ConversationActions title={conversationTitle} variant="header" disabled={streaming} exportBusy={pdfBusy}
+            onPin={() => openModal('pin-chat')}
+            onRename={() => { setRenameDraft(conversationTitle); setRenameError(''); openModal('rename-chat'); }}
+            onDownloadPdf={downloadPdf}
+            onExportDocs={() => setExportTarget({ title: conversationTitle, content: conversationMarkdown(conversationTitle, messagesRef.current), kind: 'docs' })}
+            onDelete={() => openModal('delete-chat')}
+          />}
+          {empty && <button type="button" className="pg-header-download" onClick={() => openModal('install')}><Download size={16}/>앱 다운로드</button>}{signIn('pg-signin-button')}
+        </div>
       </header>
       <div className="pg-chat-scroll" ref={scrollRef} onScroll={event => { const target = event.currentTarget; nearBottomRef.current = target.scrollHeight - target.scrollTop - target.clientHeight < 100; }}>
-        {empty ? <section className="pg-welcome" aria-labelledby="pg-welcome-title"><h1 id="pg-welcome-title">안녕하세요,<br/><span>무엇을 도와드릴까요?</span></h1></section> : <section className="pg-conversation" aria-label="체험 대화">
-          {messages.map((message, index) => message.role === 'user' ? <div className="pg-user-row" key={message.id}><div className="pg-user-bubble">{message.content}</div><div className="pg-user-actions"><button type="button" className="pg-icon-button" aria-label="질문 복사" title="질문 복사" onClick={() => void copy(message.content)}><Copy size={16}/></button><button type="button" className="pg-icon-button" aria-label="질문 수정" title="질문 수정" disabled={streaming} onClick={() => edit(index)}><Pencil size={16}/></button></div></div> : <div className="pg-assistant" key={message.id}><div className="pg-answer-mark"><PrismMark size={24}/></div><div className="pg-answer-content">
-            {message.content && <GuestMarkdown text={message.content}/>}
-            {message.status === 'streaming' && !message.content && <div className="pg-thinking" role="status"><span/><span/><span/><span className="pg-sr-only">답변 생성 중</span></div>}
-            {message.status === 'stopped' && <p className="pg-answer-status">답변 생성이 중지되었습니다.</p>}
-            {message.status === 'error' && <p className="pg-answer-error" role="alert">{message.error || '답변을 가져오지 못했습니다.'}</p>}
-            {message.status !== 'streaming' && <div className="pg-response-actions">{message.content && <button type="button" className="pg-icon-button" aria-label="답변 복사" title="답변 복사" onClick={() => void copy(message.content)}><Copy size={17}/></button>}<button type="button" className="pg-icon-button" aria-label="답변 다시 생성" title="답변 다시 생성" disabled={streaming || unavailable || bootLoading} onClick={() => void sendPrompt(messages[index - 1]?.content || '', index - 1)}><RefreshCw size={17}/></button><div className="pg-response-menu-anchor"><button type="button" className="pg-icon-button" data-popup-trigger aria-label="답변 더보기" aria-haspopup="menu" aria-expanded={popup === `response-${message.id}`} onClick={event => togglePopup(`response-${message.id}`, event.currentTarget)}><MoreHorizontal size={20}/></button>{popup === `response-${message.id}` && <div className="pg-popover pg-response-menu" role="menu" aria-label="답변 메뉴">{message.content && <button type="button" role="menuitem" onClick={() => void copy(message.content)}><Copy size={17}/>답변 복사</button>}<button type="button" role="menuitem" disabled={streaming || unavailable || bootLoading} onClick={() => void sendPrompt(messages[index - 1]?.content || '', index - 1)}><RefreshCw size={17}/>다시 생성</button><a href="/help" role="menuitem"><HelpCircle size={17}/>도움말</a></div>}</div></div>}
-          </div></div>)}
-          <p className="pg-accuracy">OpenPrism은 실수할 수 있습니다. 중요한 정보는 확인해 주세요.</p>
+        {empty ? <section className="pg-welcome" aria-labelledby="pg-welcome-title"><h1 id="pg-welcome-title"><span className="pg-mobile-greeting">안녕하세요,<br/></span><span>무엇을 도와드릴까요?</span></h1></section> : <section className="pg-conversation" aria-label="체험 대화">
+          {messages.map((message, index) => message.role === 'user' ? <div className="pg-user-row" key={message.id}>
+            <div className="pg-user-bubble" tabIndex={0} aria-label="내 프롬프트" onPointerUp={event => { if (!(event.target as HTMLElement).closest('button')) event.currentTarget.focus({ preventScroll: true }); }}><CollapsiblePrompt text={message.content}/></div>
+            <div className="pg-user-actions">
+              <button type="button" className="pg-icon-button" data-copied={isCopied(message.id, message.content)} aria-label={isCopied(message.id, message.content) ? '프롬프트 복사됨' : '프롬프트 복사'} title={isCopied(message.id, message.content) ? '복사됨' : '프롬프트 복사'} onClick={() => void copy(message)}>{isCopied(message.id, message.content) ? <Check size={16}/> : <Copy size={16}/>}</button>
+              <button type="button" className="pg-icon-button" aria-label="질문 수정" title="질문 수정" disabled={streaming} onClick={() => edit(index)}><Pencil size={16}/></button>
+            </div>
+          </div> : <div className="pg-assistant" key={message.id} data-streaming={message.status === 'streaming' ? 'true' : undefined}>
+            <div className="pg-answer-content">
+              {message.content && <GuestMarkdown text={message.content}/>}
+              {message.status === 'streaming' && !message.content && <ThinkingIndicator/>}
+              {message.status === 'stopped' && <p className="pg-answer-status">답변 생성이 중지되었습니다.</p>}
+              {message.status === 'error' && <p className="pg-answer-error" role="alert">{message.error || '답변을 가져오지 못했습니다.'}</p>}
+              {message.status === 'complete' && message.content && <ResponseActions
+                messageId={message.id} content={message.content} scope={`${pathname}:${sessionId}`}
+                copied={isCopied(message.id, message.content)} feedback={message.feedback || null} feedbackDestination="browser"
+                isLatest={index === lastAssistantIndex} regenerateDisabled={streaming || unavailable || bootLoading}
+                onCopy={() => copy(message)} onFeedback={(value, details) => setFeedback(message.id, value, details)}
+                onRegenerate={style => sendPrompt(messages[index - 1]?.content || '', index - 1, style)}
+                onExportDocs={() => exportResponse(message, 'docs')}
+                onCreateGmailDraft={() => exportResponse(message, 'gmail')}
+                onReportLegalIssue={() => setReportTarget(responseDetails(message))}
+                onViewDetails={() => setDetailTarget(responseDetails(message))}
+                onError={setAnnouncement}
+              />}
+              {(message.status === 'stopped' || message.status === 'error') && index === lastAssistantIndex && <button type="button" className="pg-retry-response" disabled={streaming || unavailable || bootLoading} onClick={() => void sendPrompt(messages[index - 1]?.content || '', index - 1)}><RefreshCw size={16} aria-hidden="true"/>다시 시도</button>}
+            </div>
+          </div>)}
         </section>}
       </div>
       <div className="pg-compose-area">
-        {hasInteracted && !streaming && <aside className="pg-signin-reminder"><p>대화를 저장하고 더 많은 기능을<br className="pg-reminder-break"/> 사용하려면 로그인하세요.</p>{signIn('pg-reminder-signin')}</aside>}
+        {!empty && <aside className="pg-signin-reminder"><p>대화를 저장하고 더 많은 기능을<br className="pg-reminder-break"/> 사용하려면 로그인하세요.</p>{signIn('pg-reminder-signin')}</aside>}
         {(bootError || (bootstrap?.available && bootstrap.remaining <= 0)) && <div className="pg-service-notice" role="status"><span>{bootError || '오늘의 체험 횟수를 모두 사용했습니다.'}</span>{bootError ? <button type="button" disabled={bootLoading} onClick={() => void loadBootstrap()}>{bootLoading ? '연결 중…' : '다시 연결'}</button> : signIn('', '로그인')}</div>}
         {editing !== null && <div className="pg-edit-notice"><span>질문 수정 · 전송하면 이후 대화가 새로 생성됩니다.</span><button type="button" onClick={() => { setEditing(null); setDraft(''); }} aria-label="수정 취소"><X size={16}/></button></div>}
         {composerError && <div className="pg-composer-error" role="alert">{composerError}</div>}
         <form className={`pg-composer ${listening ? 'pg-is-listening' : ''}`} onSubmit={event => { event.preventDefault(); submit(); }}>
           <div className="pg-tools-anchor"><button type="button" className="pg-icon-button pg-add-button" data-popup-trigger aria-label="도구 및 파일" aria-haspopup="menu" aria-expanded={popup === 'tools'} onClick={event => togglePopup('tools', event.currentTarget)}><Plus size={24}/></button>{popup === 'tools' && <div className="pg-popover pg-tools-menu" role="menu" aria-label="도구 및 파일"><div className="pg-menu-heading">로그인하여 사용</div><a href={signInHref} target="_top" role="menuitem" onClick={rememberSignIn}><FilePlus2 size={18}/><span>파일 추가</span><LockKeyhole size={14}/></a><div className="pg-menu-divider"/><a href={signInHref} target="_top" role="menuitem" onClick={rememberSignIn}><ImagePlus size={18}/><span>이미지 생성</span><LockKeyhole size={14}/></a><a href={signInHref} target="_top" role="menuitem" onClick={rememberSignIn}><SquarePen size={18}/><span>문서 작업</span><LockKeyhole size={14}/></a><a href={signInHref} target="_top" role="menuitem" onClick={rememberSignIn}><Sparkles size={18}/><span>워크스페이스 도구</span><LockKeyhole size={14}/></a>{signIn('pg-menu-signin', '로그인하여 계속하기', true)}</div>}</div>
-          <label className="pg-sr-only" htmlFor="pg-prompt">OpenPrism에 메시지 보내기</label><textarea id="pg-prompt" ref={inputRef} value={draft} onChange={event => { setDraft(event.target.value); if (composerError) setComposerError(''); }} onKeyDown={composerKey} placeholder="OpenPrism에게 물어보세요" rows={1} maxLength={8000} disabled={!ready} aria-describedby="pg-input-help"/>
-          <div className="pg-desktop-model-anchor"><button type="button" className="pg-model-trigger" data-popup-trigger aria-haspopup="menu" aria-expanded={popup === 'model'} onClick={event => togglePopup('model', event.currentTarget)}><span>{modelName}</span><ChevronDown size={14}/></button>{popup === 'model' && !isMobile && modelMenu()}</div>
+          <label className="pg-sr-only" htmlFor="pg-prompt">Prism에 메시지 보내기</label><textarea id="pg-prompt" ref={inputRef} value={draft} onChange={event => { setDraft(event.target.value); if (composerError) setComposerError(''); }} onKeyDown={composerKey} placeholder="Prism에게 물어보세요" rows={1} maxLength={8000} disabled={!ready} aria-describedby="pg-input-help"/>
+          <div className="pg-desktop-model-anchor">{modelPicker(false)}</div>
           {streaming ? <button type="button" className="pg-submit pg-stop" aria-label="답변 생성 중지" title="답변 생성 중지" onClick={stop}><Square size={17} fill="currentColor"/></button> : draft.trim() ? <button type="submit" className="pg-submit" disabled={!canSubmit} aria-label="메시지 보내기" title="메시지 보내기">{bootLoading ? <LoaderCircle size={20} className="pg-spin"/> : <ArrowUp size={22}/>}</button> : <button type="button" className="pg-icon-button pg-mic" aria-label={listening ? '음성 입력 중지' : '음성 입력'} aria-pressed={listening} title="음성 입력" disabled={!ready} onClick={dictate}><Mic size={22}/></button>}
         </form>
         <p id="pg-input-help" className="pg-sr-only">Enter로 전송하고 Shift와 Enter로 줄을 바꿀 수 있습니다. 체험 대화는 이 탭에 임시로 보관됩니다.</p>
-        <footer className="pg-footer"><span>로그인 전 대화는 임시 보관됩니다.</span> <a href="/privacy">개인정보 처리방침</a><span aria-hidden="true"> · </span><a href="/terms">이용약관</a></footer>
       </div>
+      <footer className="pg-footer"><p className="pg-accuracy">OpenPrism은 실수할 수 있습니다. 중요한 정보는 확인해 주세요.</p><span className="pg-footer-legal"><a href="/privacy">개인정보 처리방침</a><span aria-hidden="true"> · </span><a href="/terms">이용약관</a></span></footer>
     </div>
-    {modal === 'new-chat' && <GuestDialog returnFocus={dialogTrigger.current} title="새 채팅을 시작할까요?" onClose={() => setModal(null)} className="pg-new-chat-dialog"><p>현재 대화는 저장되지 않았습니다.<br/>새 채팅을 시작하면 이 대화가<br/>삭제됩니다.</p><div className="pg-dialog-actions"><button type="button" data-initial-focus className="pg-dialog-cancel" onClick={() => setModal(null)}>취소</button><button type="button" className="pg-dialog-primary" onClick={clearChat}>새 채팅</button></div></GuestDialog>}
+    {modal === 'sign-in' && <GuestSignInDialog reason={signInReason} signInHref={signInHref} onSignIn={rememberSignIn} onClose={() => setModal(null)} returnFocus={dialogTrigger.current}/>}
+    {(modal === 'new-chat' || modal === 'delete-chat') && <GuestDialog returnFocus={dialogTrigger.current} title={modal === 'delete-chat' ? '대화를 삭제할까요?' : '새 채팅을 시작할까요?'} onClose={() => setModal(null)} className="pg-new-chat-dialog"><p>{modal === 'delete-chat' ? '이 탭의 대화와 의견을 삭제합니다. 삭제한 대화는 복구할 수 없습니다.' : <>현재 대화는 이 탭에 임시 보관되어 있습니다.<br/>새 채팅을 시작하면 이 대화가 삭제됩니다.</>}</p><div className="pg-dialog-actions"><button type="button" data-initial-focus className="pg-dialog-cancel" onClick={() => setModal(null)}>취소</button><button type="button" className="pg-dialog-primary" onClick={clearChat}>{modal === 'delete-chat' ? '삭제' : '새 채팅'}</button></div></GuestDialog>}
+    {modal === 'rename-chat' && <GuestDialog returnFocus={dialogTrigger.current} title="이름 변경" onClose={() => setModal(null)}>
+      <form onSubmit={renameChat}><label className="pg-rename-field">대화 이름<input data-initial-focus value={renameDraft} onChange={event => { setRenameDraft(event.target.value); setRenameError(''); }} onFocus={event => event.currentTarget.select()} maxLength={120} required/></label>{renameError && <p className="pg-answer-error" role="alert">{renameError}</p>}<div className="pg-dialog-actions"><button type="button" className="pg-dialog-cancel" onClick={() => setModal(null)}>취소</button><button type="submit" className="pg-dialog-primary" disabled={!renameDraft.trim()}>저장</button></div></form>
+    </GuestDialog>}
+    {modal === 'pin-chat' && <GuestDialog returnFocus={dialogTrigger.current} title="대화를 고정하려면 로그인하세요" onClose={() => setModal(null)}><p>로그인한 뒤 현재 대화를 저장하면 채팅 기록에서 고정할 수 있습니다.</p><div className="pg-dialog-actions"><button type="button" data-initial-focus className="pg-dialog-cancel" onClick={() => setModal(null)}>취소</button>{signIn('pg-dialog-signin')}</div></GuestDialog>}
     {modal === 'install' && <GuestDialog returnFocus={dialogTrigger.current} title="OpenPrism 앱 설치" onClose={() => setModal(null)}><p>OpenPrism을 홈 화면이나 데스크톱에 추가하면 앱처럼 바로 열 수 있습니다.</p>{installEvent ? <button className="pg-install-action" type="button" onClick={() => void install()}><Download size={18}/>이 기기에 설치</button> : <div className="pg-install-instructions"><p><strong>Chrome · Edge</strong><br/>브라우저 메뉴에서 ‘설치’ 또는 ‘앱으로 설치’를 선택해 주세요.</p><p><strong>iPhone · iPad</strong><br/>Safari의 공유 메뉴에서 ‘홈 화면에 추가’를 선택해 주세요.</p><p>설치 메뉴가 없으면 이 페이지를 북마크해 이용할 수 있습니다.</p></div>}{installMessage && <p role="status">{installMessage}</p>}<div className="pg-dialog-actions"><button type="button" data-initial-focus className="pg-dialog-primary" onClick={() => setModal(null)}>닫기</button></div></GuestDialog>}
-    <div className="pg-sr-only" role="status" aria-live="polite" aria-atomic="true">{announcement}</div>
-    {announcement && <div className="pg-toast" aria-hidden="true">{announcement}</div>}
+    {exportTarget && <DeferredPanel dialog label="내보내기" onClose={() => setExportTarget(null)}><ExportDialog target={exportTarget} signedIn={false} onClose={() => setExportTarget(null)}/></DeferredPanel>}
+    {detailTarget && <DeferredPanel dialog label="대답 세부정보" onClose={() => setDetailTarget(null)}><ResponseDetailsDialog target={detailTarget} onClose={() => setDetailTarget(null)}/></DeferredPanel>}
+    {reportTarget && <DeferredPanel dialog label="법적 문제 신고" onClose={() => setReportTarget(null)}><LegalReportDialog target={reportTarget} signedIn={false} onClose={() => setReportTarget(null)}/></DeferredPanel>}
+    <div key={copyNotice ? copyNoticeKey : 'announcement'} className="pg-sr-only" role="status" aria-live="polite" aria-atomic="true">{copyNotice || announcement}</div>
+    {toastNotice && <div className="pg-toast" aria-hidden="true">{toastNotice}</div>}
   </div>;
 }

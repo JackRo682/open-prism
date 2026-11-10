@@ -1,0 +1,97 @@
+.prism-collapsible-prompt {
+  position: relative;
+  min-width: 0;
+  font-size: 17px;
+  line-height: 24px;
+  white-space: normal;
+}
+
+.prism-collapsible-prompt .prism-collapsible-prompt__text {
+  margin: 0;
+  padding: 0;
+  font: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  line-clamp: 4;
+  max-height: 96px;
+  max-height: 4lh;
+  overflow: hidden;
+}
+
+/* Reserve the corner affordance's column so it never covers prompt text. */
+.prism-collapsible-prompt[data-overflow='true'] .prism-collapsible-prompt__text {
+  padding-inline-end: 28px;
+}
+
+.prism-collapsible-prompt[data-expanded='true'] .prism-collapsible-prompt__text {
+  display: block;
+  -webkit-line-clamp: unset;
+  line-clamp: unset;
+  max-height: none;
+  overflow: visible;
+}
+
+.prism-collapsible-prompt .prism-collapsible-prompt__toggle {
+  position: absolute;
+  right: -8px;
+  bottom: -8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 20px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+  opacity: .9;
+  transition: background-color .12s ease, opacity .12s ease;
+}
+
+.prism-collapsible-prompt__toggle::before {
+  content: '';
+  position: absolute;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--pg-bg, var(--prism-page, #fff));
+}
+
+.prism-collapsible-prompt .prism-collapsible-prompt__toggle:hover {
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  opacity: 1;
+}
+
+.prism-collapsible-prompt .prism-collapsible-prompt__toggle:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+  opacity: 1;
+}
+
+.prism-collapsible-prompt__toggle > svg { position: relative; flex-shrink: 0; }
+.prism-collapsible-prompt[data-expanded='true'] .prism-collapsible-prompt__toggle > svg { transform: rotate(180deg); }
+
+@media (prefers-reduced-motion: reduce) {
+  .prism-collapsible-prompt .prism-collapsible-prompt__toggle { transition: none; }
+}
+
+@media print {
+  .prism-collapsible-prompt .prism-collapsible-prompt__text {
+    display: block !important;
+    -webkit-line-clamp: unset !important;
+    line-clamp: unset !important;
+    max-height: none !important;
+    overflow: visible !important;
+    padding-inline-end: 0 !important;
+  }
+  .prism-collapsible-prompt .prism-collapsible-prompt__toggle { display: none !important; }
+}

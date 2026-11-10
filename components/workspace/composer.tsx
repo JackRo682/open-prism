@@ -4,12 +4,13 @@ import { useEffect, useId, useRef, useState, type RefObject } from 'react';
 import { Dialog, DropdownMenu, Popover } from 'radix-ui';
 import {
   ArrowUp, Atom, BookOpen, Check, ChevronDown, ChevronRight, Cloud,
-  FileText, FolderOpen, Globe2, Image, ImagePlus, LoaderCircle, Mic,
+  FileText, FolderOpen, Globe2, Image, ImagePlus, LoaderCircle, LockKeyhole, Mic,
   MoreHorizontal, Music2, PanelsTopLeft, Paperclip, Plus, PlugZap,
   RectangleHorizontal, RectangleVertical, ScrollText, Search,
   SlidersHorizontal, Square, Upload, Video, X, type LucideIcon,
 } from 'lucide-react';
 import type { Model, Provider } from '../../lib/models';
+import { isFreeModel } from '../../lib/models';
 import { useIsMobile } from '../../hooks/use-mobile';
 
 export type ComposerTool = 'chat' | 'canvas' | 'research' | 'learning' | 'image' | 'video';
@@ -50,6 +51,7 @@ export type ComposerProps = {
   models: Model[]; selected: Model; onModel(model: Model): void;
   providers: Record<Provider, { configured: boolean }>;
   effort: string; onEffort(value: string): void;
+  pro?: boolean; onPro?(value:boolean):void;
   mode: 'chat' | 'work'; compare?: boolean;
   tool?: ComposerTool; onTool?(tool: ComposerTool): void;
   researchSources?: ComposerResearchSources;
@@ -69,6 +71,7 @@ export type ComposerProps = {
   onSend(): void; onStop(): void; onNavigate(path: string): void;
   onError(message: string): void;
   signedIn: boolean;
+  walletBalance?: number | null;
   selectedSkill: { id: string; name: string } | null;
   onSkill(skill: { id: string; name: string } | null): void;
 };
@@ -132,7 +135,7 @@ export function Composer(props: ComposerProps) {
   const showCapabilityNotice = !!capabilityNotice && props.showCapabilityNotice !== false;
   const expanded = tool !== 'chat' || prompt.includes('\n') || prompt.length > 100;
   const placeholder = props.compare ? '여러 모델에 같은 질문을 입력하세요'
-    : details?.placeholder ?? (props.mode === 'work' ? '어떤 작업을 도와드릴까요?' : 'Prism에게 물어보기');
+    : details?.placeholder ?? (props.mode === 'work' ? '어떤 작업을 도와드릴까요?' : 'Prism에게 물어보세요');
 
   useEffect(() => {
     const input = inputRef.current;
@@ -330,15 +333,19 @@ export function Composer(props: ComposerProps) {
       </button>}
       <div className="gemini-composer-actions">
         {!props.compare && props.mode !== 'work' && !isMedia && tool !== 'learning' && <Popover.Root open={modelOpen} onOpenChange={open => { setModelOpen(open); if (!open) setQuery(''); }}>
-          <Popover.Trigger asChild><button type="button" className="gemini-model-trigger" disabled={props.busy} aria-label={`모델 선택: ${props.selected.name}`}><span>{props.selected.name}</span><ChevronDown size={18} aria-hidden="true" /></button></Popover.Trigger>
+          <Popover.Trigger asChild><button type="button" className="gemini-model-trigger" disabled={props.busy} aria-label={`모델 선택: ${props.selected.name}`}><span>{isFreeModel(props.selected.id) ? 'Flash-Lite' : props.selected.name}</span><ChevronDown size={18} aria-hidden="true" /></button></Popover.Trigger>
           <Popover.Portal><Popover.Content className="prism-model-menu" side="bottom" align="end" sideOffset={14} collisionPadding={12}>
             <div className="prism-model-menu-heading"><strong>모델 선택</strong><Popover.Close className="prism-icon" aria-label="모델 선택 닫기"><X size={18} aria-hidden="true" /></Popover.Close></div>
             <label className="prism-model-search"><Search size={17} aria-hidden="true" /><input placeholder="모델 검색" aria-label="모델 검색" value={query} onChange={event => setQuery(event.target.value)} /></label>
             <div className="prism-model-options" role="group" aria-label="AI 모델">
-              {filtered.map(model => <button type="button" key={model.id} aria-pressed={model.id === props.selected.id} className="prism-model-option" onClick={() => { props.onModel(model); setModelOpen(false); setQuery(''); }}><span className={`prism-provider-dot ${model.provider}`} /><span><strong>{model.name}</strong><small>{model.category} · {props.providers[model.provider].configured ? '연결됨' : 'API 연결 필요'}</small></span>{model.id === props.selected.id && <Check size={18} aria-hidden="true" />}</button>)}
+              {filtered.map(model => {
+                const free = isFreeModel(model.id), locked = !free && (!props.signedIn || (props.walletBalance ?? 0) <= 0);
+                return <button type="button" key={model.id} aria-pressed={model.id === props.selected.id} className="prism-model-option" data-locked={locked || undefined} onClick={() => { props.onModel(model); setModelOpen(false); setQuery(''); }}><span className={`prism-provider-dot ${model.provider}`} /><span><strong>{model.name}</strong><small>{free ? '무료 · 일일 한도 적용' : !props.signedIn ? '유료 · 로그인 후 크레딧 충전 필요' : props.walletBalance === null ? '유료 · 잔액 확인 중' : locked ? '유료 · 크레딧 충전 후 이용 가능' : '유료 · 사용량만큼 크레딧 차감'}{!props.providers[model.provider].configured ? ' · 연결 준비 중' : ''}</small></span>{locked ? <LockKeyhole size={16} aria-hidden="true" /> : model.id === props.selected.id && <Check size={18} aria-hidden="true" />}</button>;
+              })}
               {filtered.length === 0 && <p className="prism-menu-empty">일치하는 모델이 없습니다.</p>}
             </div>
-            {props.selected.efforts.length > 0 && <label className="prism-reasoning"><SlidersHorizontal size={17} aria-hidden="true" /><span>추론 수준</span><select aria-label="추론 수준" value={props.effort} onChange={event => props.onEffort(event.target.value)}>{props.selected.efforts.map(effort => <option key={effort} value={effort}>{effort}</option>)}</select></label>}
+            {props.selected.efforts.length > 0 && <label className="prism-reasoning"><SlidersHorizontal size={17} aria-hidden="true" /><span>추론 수준</span><select aria-label="추론 수준" value={props.effort} onChange={event => props.onEffort(event.target.value)}>{props.selected.efforts.map(effort => <option key={effort} value={effort}>{{none:'Off',minimal:'Minimal',low:'Low',medium:'Medium',high:'High',xhigh:'Extra High',max:'Max'}[effort]||effort}</option>)}</select></label>}
+            {props.selected.pro && props.onPro && <label className="prism-reasoning"><SlidersHorizontal size={17} aria-hidden="true" /><span>추론 모드</span><select aria-label="추론 모드" value={props.pro?'pro':'standard'} onChange={event=>props.onPro?.(event.target.value==='pro')}><option value="standard">Standard</option><option value="pro">Pro</option></select></label>}
             <button type="button" className="prism-model-library" onClick={() => { setModelOpen(false); props.onNavigate('/models'); }}>전체 모델 라이브러리</button>
           </Popover.Content></Popover.Portal>
         </Popover.Root>}

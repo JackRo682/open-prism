@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const require = createRequire(await realpath(new URL('../node_modules/wrangler/package.json', import.meta.url)));
 const { Miniflare } = await import(pathToFileURL(require.resolve('miniflare')).href);
 const { build } = await import(pathToFileURL(require.resolve('esbuild')).href);
-// The Worker and admission controller are the actual backport
+// The Worker, admission controller and security wrappers are the production
 // modules. Only the framework response is replaced with a bounded fixture.
 const bundle = await build({
   bundle: true, write: false, format: 'esm', platform: 'node', target: 'es2022', external: ['node:*'],
@@ -96,6 +96,16 @@ for (const mode of ['body-limit', 'request-limit']) test(`actual Workerd gate re
   assert.equal(result.headers['x-content-type-options'], 'nosniff');
   assert.match(result.headers['cache-control'], /no-store/);
   assert.match(result.headers['content-security-policy'], /sandbox/);
+});
+
+test('actual Workerd rejects page mutations without transferring or reading their request bodies', async () => {
+  const response = await worker.dispatchFetch('https://prism.test/mutation');
+  assert.equal(response.status, 200, await response.clone().text());
+  const result = await response.json();
+  assert.equal(result.status, 405);
+  assert.equal(result.calls, 0);
+  assert.deepEqual(result.events, ['cancel']);
+  assert.equal(result.headers['x-content-type-options'], 'nosniff');
 });
 
 test('actual Workerd error paths cancel the forwarded live stream, redact details, and free admission slots', async () => {

@@ -309,6 +309,37 @@
   to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
 }
 @media (max-width: 767px) {
+  /* Gemini's mobile resting composer is an 80px pill. Keep the full 44px
+     targets; the extra text/action row is only needed for expanded drafts. */
+  .gemini-shell .gemini-composer[data-expanded='false'] {
+    grid-template-columns: 44px minmax(0, 1fr) auto;
+    grid-template-rows: minmax(44px, auto);
+    column-gap: 4px;
+    row-gap: 0;
+    min-height: 80px;
+    padding: 18px 12px;
+    border-radius: 40px;
+  }
+  .gemini-shell .gemini-composer[data-expanded='false'] textarea.gemini-prompt {
+    grid-column: 2;
+    grid-row: 1;
+    padding: 0;
+  }
+  .gemini-shell .gemini-composer[data-expanded='false'] .gemini-add {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .gemini-shell .gemini-composer[data-expanded='false'] .gemini-composer-actions {
+    grid-column: 3;
+    grid-row: 1;
+    gap: 0;
+  }
+  .gemini-shell .gemini-composer[data-expanded='false'] .gemini-model-trigger {
+    max-width: 88px;
+    padding-inline: 4px;
+  }
+  .gemini-shell .gemini-mic:not([aria-pressed='true']):has(+ .gemini-send) { display: none; }
+  .gemini-shell .gemini-mic[aria-pressed='true'] + .gemini-send { display: none; }
   .gemini-shell .gemini-composer[data-expanded='true'] {
     grid-template-columns: 44px minmax(0, 1fr) auto;
     grid-template-rows: minmax(40px, auto) 44px;

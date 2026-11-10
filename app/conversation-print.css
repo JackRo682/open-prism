@@ -1,0 +1,171 @@
+/* An export uses the chat's actual DOM and screen styles. The temporary copy
+ * stays out of layout, navigation and accessibility until native printing. */
+.app-shell.gemini-shell.prism-print-root {
+  position: fixed;
+  top: 0;
+  left: -100000px;
+  display: block;
+  visibility: hidden;
+  pointer-events: none;
+  width: var(--prism-print-width, 708px);
+  max-width: none;
+  height: auto;
+  min-height: 0;
+  overflow: visible;
+}
+.gemini-shell.prism-print-root .conversation-screen.prism-thread {
+  width: 100%;
+  max-width: none;
+  min-height: 0;
+  margin: 0;
+}
+.prism-print-root *, .prism-print-root *::before, .prism-print-root *::after {
+  animation: none !important;
+  transition: none !important;
+}
+
+@media print {
+  @page { size: auto; margin: 10mm; }
+
+  html:has(.gemini-shell),
+  body:has(.gemini-shell) {
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    background: var(--prism-page) !important;
+    color: var(--prism-ink) !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* Print only the selected conversation, including one chosen from history. */
+  html[data-prism-print='conversation'] body > :not(.prism-print-root) {
+    display: none !important;
+  }
+
+  /* Native Ctrl+P and the non-chat header button still print the current page. */
+  html:not([data-prism-print='conversation']) body:has(.gemini-shell) > :not(.gemini-shell):not(:has(.gemini-shell)),
+  html:not([data-prism-print='conversation']) body:has(.gemini-shell) :has(.gemini-shell) > :not(.gemini-shell):not(:has(.gemini-shell)) {
+    display: none !important;
+  }
+
+  .app-shell.gemini-shell,
+  .gemini-shell :is(.gemini-workspace, .gemini-main, .prism-conversation-layout,
+    .prism-canvas-layout, .conversation-screen, .messages) {
+    display: block !important;
+    position: static !important;
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    overflow: visible !important;
+    transform: none !important;
+    contain: none !important;
+  }
+  .app-shell.gemini-shell,
+  .gemini-shell :is(.gemini-workspace, .gemini-main, .prism-conversation-layout, .prism-canvas-layout) {
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+  .gemini-shell .conversation-screen.prism-thread {
+    width: 100% !important;
+    max-width: var(--prism-print-width, 708px) !important;
+    margin: 0 auto !important;
+    padding: 0 !important;
+  }
+  .app-shell.gemini-shell.prism-print-root {
+    visibility: visible !important;
+    pointer-events: auto;
+  }
+  .gemini-shell .messages { padding: 0 !important; }
+
+  .gemini-shell .gemini-workspace::before,
+  .gemini-shell :is(.gemini-sidebar, .gemini-topbar, .sidebar-backdrop,
+    .chat-composer, .prism-thread-footer, .gemini-compose-wrap, .gemini-mode-switch,
+    .chat-toolbar, .prism-library-nav, .message-copy, .toast, .error-banner,
+    .app-footer, .prism-canvas-panel, .prism-chat-actions, .prism-response-actions,
+    .prism-user-actions, .prism-recovery-banner, .prism-chat-loading, button),
+  body:has(.gemini-shell) :is([data-radix-popper-content-wrapper],
+    .prism-dialog-overlay, .prism-dialog-content, .prism-search-dialog,
+    .prism-confirm-dialog, .modal-backdrop, .prism-canvas-dialog,
+    .prism-video-intro, .prism-image-notice-overlay, .prism-image-notice) {
+    display: none !important;
+  }
+
+  .gemini-shell *, .gemini-shell *::before, .gemini-shell *::after {
+    animation: none !important;
+    transition: none !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* Bubbles, Markdown, colors and spacing come from the screen stylesheet.
+   * Only pagination and scroll constraints differ on paper. */
+  .gemini-shell .message {
+    display: block !important;
+    position: static !important;
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+    break-inside: auto !important;
+    page-break-inside: auto !important;
+    box-decoration-break: clone;
+    -webkit-box-decoration-break: clone;
+  }
+  .gemini-shell .message.user { margin-left: auto !important; }
+  .gemini-shell .messages > .message:not(:has(~ .message)) { margin-bottom: 0 !important; }
+  .gemini-shell .messages > :last-child:empty { display: none !important; }
+  .gemini-shell :is(.message-body, .pg-markdown, .response-text) {
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+    content-visibility: visible !important;
+    transform: none !important;
+    opacity: 1 !important;
+  }
+  .gemini-shell :is(.pg-markdown, .response-text) > :last-child { margin-bottom: 0 !important; }
+  .gemini-shell :is(.prism-query-text, .pg-markdown p, .pg-markdown li, .response-text p) {
+    orphans: 2;
+    widows: 2;
+  }
+  .gemini-shell :is(.pg-markdown, .response-text) :is(h1, h2, h3, h4, h5, h6),
+  .gemini-shell .pg-code > span { break-after: avoid-page; }
+
+  .gemini-shell :is(.pg-code, .pg-table-scroll, .table-scroll) {
+    overflow: visible !important;
+    max-height: none !important;
+    break-inside: auto !important;
+  }
+  .gemini-shell :is(.pg-markdown, .response-text) :is(pre, code) {
+    max-width: 100% !important;
+    overflow: visible !important;
+    white-space: pre-wrap !important;
+    overflow-wrap: anywhere !important;
+    break-inside: auto !important;
+  }
+  .gemini-shell .pg-table-scroll table {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    table-layout: fixed !important;
+    color: inherit;
+  }
+  .gemini-shell .pg-table-scroll :is(th, td) {
+    min-width: 0 !important;
+    max-width: none !important;
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+    color: inherit;
+  }
+  .gemini-shell .pg-table-scroll th { background: transparent; }
+  .gemini-shell .pg-table-scroll thead { display: table-header-group; }
+  .gemini-shell .pg-table-scroll tr { break-inside: avoid; }
+  .gemini-shell :is(img, svg) { max-width: 100%; }
+  .gemini-shell .page-inner { padding: 0 !important; }
+  .gemini-shell :is(.gemini-welcome, .gemini-welcome-inner) { min-height: 0 !important; padding-block: 0 !important; }
+
+  html[data-print-clean='false'] .gemini-shell .chat-toolbar { display: flex !important; }
+}

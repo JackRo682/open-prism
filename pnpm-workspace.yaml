@@ -9,8 +9,8 @@ allowBuilds:
   sharp: true
   unrs-resolver: true
   workerd: true
-storeDir: ${SITES_PNPM_SHARED_STORE:-.sites-runtime/pnpm-store}
-cacheDir: ${SITES_PNPM_SHARED_STORE:-.sites-runtime/pnpm-store}/policy-cache
+storeDir: .sites-runtime/pnpm-store
+cacheDir: .sites-runtime/pnpm-store/policy-cache
 enableGlobalVirtualStore: false
 # Reuse store files with clones or hardlinks before falling back to copies.
 packageImportMethod: auto
@@ -18,4 +18,20 @@ packageImportMethod: auto
 verifyDepsBeforeRun: false
 optimisticRepeatInstall: false
 overrides:
-  miniflare>sharp: 0.35.4
+  # Reviewed security patches. Keep overrides scoped to affected versions.
+  # Hooks explicitly supports Zod v4; do not force v4 onto unrelated v3 users.
+  'eslint-plugin-react-hooks@7.1.1>zod': 4.6.6
+  'sharp@<0.35.5': 0.35.5
+  'esbuild@<0.28.1': 0.28.1
+  'ws@>=8.0.0 <8.21.0': 8.21.0
+  'undici@>=7.0.0 <7.30.1': 7.30.1
+  'js-yaml@>=4.0.0 <4.3.2': 4.3.2
+  '@babel/core@>=7.0.0 <7.29.6': 7.29.6
+  'brace-expansion@>=1.0.0 <1.1.21': 1.1.21
+  'brace-expansion@>=5.0.0 <5.0.12': 5.0.12
+  'browserslist@>=4.0.0 <4.28.7': 4.28.7
+  'fflate@>=0.7.0 <0.7.5': 0.7.5
+  'baseline-browser-mapping@>=2.0.0 <2.11.0': 2.11.0
+  'image-size@>=2.0.0 <2.0.3': 2.0.3
+  'fast-uri@>=3.0.0 <3.1.9': 3.1.9
+  'source-map-js@>=1.0.0 <1.2.2': 1.2.2

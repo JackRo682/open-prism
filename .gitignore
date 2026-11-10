@@ -55,3 +55,6 @@ next-env.d.ts
 /outputs/
 /work/
 *.tsbuildinfo
+
+# Restored from the checksum-verified, losslessly packed source before dev/build.
+/public/fonts/prism-export-cjk-v1.ttf

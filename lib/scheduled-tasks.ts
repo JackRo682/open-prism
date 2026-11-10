@@ -126,7 +126,7 @@ export async function executeScheduledTask(
 }
 
 /** The root cron endpoint authenticates its server credential before calling. */
-export async function runDueScheduledTasks(sql: D1Database, req: Request, execute: ScheduledTaskExecutor, options: { limit?: number; now?: () => number } = {}) {
+export async function runDueScheduledTasks(sql: D1Database, req: Request, execute: ScheduledTaskExecutor, options: { limit?: number; now?: () => number; withOperation?: (owner:string,run:()=>Promise<{task:ScheduledTask;conversationId:string}>)=>Promise<{task:ScheduledTask;conversationId:string}> } = {}) {
   const now = options.now ?? Date.now, limit = Math.max(1, Math.min(3, Math.floor(options.limit || 3)));
   const due = (await sql.prepare('SELECT id,user_id FROM scheduled_tasks WHERE enabled=1 AND next_run IS NOT NULL AND next_run<=? AND (run_token IS NULL OR locked_until<=?) ORDER BY next_run,id LIMIT ?')
     .bind(now(), now(), limit).all<{ id: string; user_id: string }>()).results;
@@ -135,7 +135,8 @@ export async function runDueScheduledTasks(sql: D1Database, req: Request, execut
   for (const task of due) {
     if (req.signal.aborted) break;
     try {
-      const result = await executeScheduledTask(sql, task.user_id, task.id, req, execute, { scheduled: true, now });
+      const run=()=>executeScheduledTask(sql, task.user_id, task.id, req, execute, { scheduled: true, now });
+      const result = await (options.withOperation?options.withOperation(task.user_id,run):run());
       results.push({ id: task.id, status: 'completed', conversationId: result.conversationId });
     } catch (cause) {
       results.push({ id: task.id, status: cause instanceof ScheduledTaskError && cause.status === 409 ? 'skipped' : 'error', error: (cause instanceof Error ? cause.message : '작업 실행 실패').slice(0, 500) });
