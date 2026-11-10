@@ -16,7 +16,6 @@
 @keyframes prism-pop-in{from{opacity:0;transform:scale(.98)}to{opacity:1;transform:scale(1)}}
 @media(max-width:767px){.gemini-shell .page-inner{padding:24px 20px 40px}.gemini-shell .page-heading h1{font-size:27px}.gemini-shell .page-heading p{font-size:13px}.gemini-shell .toast{left:50%;font-size:13px}.gemini-shell .conversation-screen{width:calc(100% - 32px)}.gemini-shell .message.user{max-width:90%;padding:14px 18px}.gemini-shell .response-text{font-size:15px}.gemini-shell .chat-toolbar{font-size:12px}.gemini-shell .chat-composer{padding-bottom:12px}.gemini-shell .model-grid.library-grid{grid-template-columns:1fr}.gemini-shell .stats-grid{grid-template-columns:1fr}.gemini-shell .history-chat strong{max-width:180px}.prism-dialog-content{padding:22px}.prism-tool-menu{max-width:calc(100vw - 24px)}.gemini-shell :is(.data-panel,.provider-setting,.info-panel,.compare-panel,.stat-card){padding:20px}.gemini-shell .settings-links{gap:14px}.gemini-shell .filter-tabs>button{font-size:12px;padding:8px 12px}}
 @media(prefers-reduced-motion:reduce){.prism-tool-menu,.prism-model-menu{animation:none}.gemini-shell .model-card:hover{transform:none}}
-@media print{html,body{height:auto!important;background:#fff!important;color:#111!important;overflow:visible!important}.gemini-shell{display:block!important;min-height:0!important;height:auto!important;background:#fff!important;color:#111!important}.gemini-shell .gemini-workspace,.gemini-shell .gemini-main{display:block!important;width:100%!important;margin:0!important;padding:0!important;height:auto!important;overflow:visible!important;background:none!important}.gemini-shell .gemini-workspace::before{display:none!important}.gemini-shell .gemini-sidebar,.gemini-shell .gemini-topbar,.gemini-shell .gemini-compose-wrap,.gemini-shell .gemini-mode-switch,.gemini-shell .chat-toolbar,.gemini-shell .message-copy,.gemini-shell .toast,.prism-dialog-overlay,.prism-dialog-content{display:none!important}.gemini-shell .conversation-screen{width:100%!important;max-width:none!important;min-height:0!important}.gemini-shell .message,.gemini-shell .response-text,.gemini-shell .message h4{color:#111!important;background:none!important}.gemini-shell .message{break-inside:avoid}.gemini-shell .response-text pre{background:#f5f5f5!important;color:#111!important;white-space:pre-wrap}.gemini-shell .page-inner{padding:20px!important}.gemini-shell .gemini-welcome{min-height:300px!important}.gemini-shell .gemini-welcome h1{color:#111!important}.gemini-shell button{display:none!important}html[data-print-clean='false'] .gemini-shell .chat-toolbar{display:flex!important}html[data-print-clean='false'] .gemini-shell .message-copy{display:inline-flex!important}}
 :root[data-theme] .prism-primary-button,:root[data-theme] .gemini-shell .primary-button{color:var(--prism-on-accent)}
 .prism-mention-menu{position:absolute;top:calc(100% + 10px);left:18px;width:320px;max-width:calc(100% - 36px);max-height:240px;z-index:80}.prism-mention-menu button{width:100%;text-align:left;background:transparent;color:inherit}.prism-mention-menu button:hover,.prism-mention-menu button:focus-visible{background:var(--prism-hover)}
 .prism-chat-actions{display:flex;align-items:center;gap:16px}.prism-chat-actions button{display:flex;align-items:center;gap:6px;color:var(--prism-muted);font-size:12px}.prism-chat-actions button:hover{color:var(--prism-ink)}.prism-share-url-label{display:grid;gap:8px;font-size:13px;margin-top:20px}.prism-share-url-label input{padding:12px;border:1px solid var(--prism-border);border-radius:12px;background:var(--prism-page);color:var(--prism-ink);font-size:13px;width:100%}
@@ -64,4 +63,40 @@
   html .prism-search-dialog .prism-search-results { min-block-size: 0; flex: 1; }
   html .prism-dialog-close { flex-basis: 44px; inline-size: 44px; block-size: 44px; }
   .prism-mention-menu { top: auto; bottom: calc(100% + 8px); max-height: min(240px, calc(var(--prism-viewport-height, 100dvh) - 180px)); }
+}
+
+/* Signed-in chat uses the same reading column through submit and response. */
+.gemini-shell .conversation-screen.prism-thread { max-width: 708px; min-height: calc(var(--prism-viewport-height, 100dvh) - 60px); padding-top: 0; }
+.gemini-shell .prism-thread .messages { padding: 5px 0 24px; }
+.gemini-shell .prism-thread .message { scroll-margin-top: 5px; }
+.gemini-shell .prism-thread .message.user {
+  position: relative; max-width: min(100%, 508px); padding: 20px 28px; margin-bottom: 52px;
+  border-radius: 40px; background: var(--prism-surface);
+}
+html[data-theme="dark"] .gemini-shell .prism-thread .message.user { background: #171717; }
+.gemini-shell .prism-query-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 17px; line-height: 24px; }
+.gemini-shell .prism-thread .message-copy { display: inline-grid; place-items: center; width: 36px; height: 36px; padding: 0; border-radius: 50%; }
+.gemini-shell .prism-thread .message-copy:hover { background: var(--prism-hover); }
+.gemini-shell .prism-thread .message.user .message-copy { position: absolute; right: 10px; top: calc(100% + 3px); margin-top: 0; }
+.gemini-shell .prism-thread .message.assistant { display: block; }
+.gemini-shell .prism-thread .message.assistant > svg { display: block; margin: 0 0 14px; }
+.gemini-shell .prism-thread .message h4.sr-only { padding: 0; }
+.gemini-shell .prism-thread .pg-markdown { color: var(--prism-ink); font-size: 17px; line-height: 1.6; overflow-wrap: anywhere; }
+.gemini-shell .prism-thread .pg-markdown > * + * { margin-top: 14px; }
+.gemini-shell .prism-thread .pg-markdown h3 { font-weight: 600; font-size: 19px; }
+.gemini-shell .prism-thread .pg-markdown ul { list-style: disc; padding-inline-start: 26px; }
+.gemini-shell .prism-thread .pg-markdown ol { list-style: decimal; padding-inline-start: 26px; }
+.gemini-shell .prism-thread .pg-markdown li + li { margin-top: 6px; }
+.gemini-shell .prism-thread .pg-markdown a { color: var(--prism-accent); text-decoration: underline; }
+.gemini-shell .prism-thread .pg-markdown pre { overflow: auto; padding: 14px; border-radius: 12px; background: var(--prism-surface); }
+.gemini-shell .prism-thread .chat-composer { padding-bottom: max(4px, env(safe-area-inset-bottom, 0px)); }
+.gemini-shell .prism-thread .chat-composer .gemini-compose-wrap { max-width: 640px; }
+.gemini-shell .prism-thread-footer { margin-top: 6px; text-align: center; color: var(--prism-muted); font-size: 11px; line-height: 16px; }
+.gemini-shell .prism-thread-menu { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 50%; }
+.gemini-shell .prism-thread-menu:hover { background: var(--prism-hover); }
+.gemini-shell .gemini-recent > button span { display: block; min-width: 0; }
+.gemini-shell .gemini-mic:disabled:has(+ .gemini-send) { display: none; }
+@media (max-width: 767px) {
+  .gemini-shell .conversation-screen.prism-thread { width: calc(100% - 32px); }
+  .gemini-shell .prism-thread .message.user { max-width: 88%; padding: 14px 18px; border-radius: 26px; }
 }

@@ -1,5 +1,8 @@
 'use client';
 
+import './integrations.css';
+import './sharing.css';
+
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Dialog, Switch } from 'radix-ui';
 import { BrowserSettingsPage } from './browser-settings';
@@ -17,7 +20,7 @@ type WorkspaceSettings = {
   workResponseStyle: 'plan-first' | 'direct';
   skills: Skill[];
 };
-type ShareRecord = { id: string; token: string; title: string; created_at: number };
+type ShareRecord = { id: string; token: string; title: string; created_at: number; expires_at: number | null; status: 'active' | 'expired' };
 
 export interface SettingsPagesProps {
   pathname: string;
@@ -203,6 +206,9 @@ function SharingPage({ onNavigate, onNotice }: Pick<SettingsPagesProps, 'onNavig
   const [deleting, setDeleting] = useState<ShareRecord | null>(null);
   const [busy, setBusy] = useState(false);
   const [origin, setOrigin] = useState('');
+  const [expiryChoices, setExpiryChoices] = useState<Record<string, string>>({});
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 30_000); return () => clearInterval(timer); }, []);
   useEffect(() => {
     const controller = new AbortController();
     setOrigin(window.location.origin);
@@ -212,14 +218,31 @@ function SharingPage({ onNavigate, onNotice }: Pick<SettingsPagesProps, 'onNavig
       .catch((cause) => { if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : '링크를 불러오지 못했습니다.'); });
     return () => controller.abort();
   }, [attempt]);
+  async function updateExpiry(share: ShareRecord) {
+    if (busy) return;
+    const choice = expiryChoices[share.id] || '7';
+    setBusy(true); setError('');
+    try {
+      const result = await request<{ expires_at: number | null }>('shares/' + encodeURIComponent(share.id), {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ expiresInDays: choice === 'never' ? null : Number(choice) }),
+      });
+      setShares(current => current?.map(item => item.id === share.id ? { ...item, expires_at: result.expires_at, status: 'active' } : item) || []);
+      onNotice?.('공개 링크의 만료 기간을 변경했습니다.');
+    } catch (cause) { setError(cause instanceof Error ? cause.message : '만료 기간을 변경하지 못했습니다.'); }
+    finally { setBusy(false); }
+  }
   if (!shares) return <LoadingOrError error={error} retry={() => setAttempt((value) => value + 1)} />;
   return <>
     <ErrorMessage message={error} />
     {shares.length ? <div className="prism-share-list">{shares.map((share) => {
       const url = `${origin}/share/${encodeURIComponent(share.token)}`;
-      return <section className="prism-share-record" key={share.id}><Link2 size={20} /><div><h2>{share.title}</h2><a href={url} target="_blank" rel="noreferrer">{url}</a><time dateTime={new Date(share.created_at).toISOString()}>{new Date(share.created_at).toLocaleDateString('ko-KR')}</time></div><div className="prism-setting-actions"><button aria-label={`${share.title} 링크 복사`} onClick={async () => { try { await navigator.clipboard.writeText(url); onNotice?.('공개 링크를 복사했습니다.'); } catch { setError('클립보드에 접근할 수 없습니다. 링크를 직접 복사해 주세요.'); } }}><Copy size={16} /></button><button aria-label={`${share.title} 공유 취소`} disabled={busy} onClick={() => setDeleting(share)}><Trash2 size={16} /></button></div></section>;
+      const expired = share.status === 'expired' || (share.expires_at !== null && share.expires_at <= now);
+      return <section className="prism-share-record" key={share.id}><Link2 size={20} /><div><h2>{share.title}</h2>{expired ? <span className="prism-share-expiry-note">만료된 링크</span> : <a href={url} target="_blank" rel="noreferrer">{url}</a>}<time dateTime={new Date(share.created_at).toISOString()}>생성: {new Date(share.created_at).toLocaleDateString('ko-KR')}</time>
+        <span className="prism-share-status" data-expired={expired}>{expired ? '만료됨 · 새로 공유하려면 대화에서 새 링크를 만들어주세요.' : share.expires_at === null ? '사용 중 · 자동 만료 없음' : '사용 중 · ' + new Date(share.expires_at).toLocaleString('ko-KR') + ' 만료'}</span>
+        {!expired && <><label className="prism-share-expiry-control">지금부터<select aria-label={`${share.title} 만료 기간`} value={expiryChoices[share.id] || '7'} disabled={busy} onChange={event => setExpiryChoices(current => ({ ...current, [share.id]: event.target.value }))}><option value="1">1일 후</option><option value="7">7일 후</option><option value="30">30일 후</option><option value="never">만료 없음</option></select><button disabled={busy} onClick={() => void updateExpiry(share)}>만료 변경</button></label>{expiryChoices[share.id] === 'never' && <p className="prism-share-expiry-note">변경하면 직접 공유를 취소할 때까지 링크가 유지됩니다.</p>}</>}
+      </div><div className="prism-setting-actions"><button aria-label={`${share.title} 링크 복사`} disabled={expired} onClick={async () => { try { await navigator.clipboard.writeText(url); onNotice?.('공개 링크를 복사했습니다.'); } catch { setError('클립보드에 접근할 수 없습니다. 링크를 직접 복사해 주세요.'); } }}><Copy size={16} /></button><button aria-label={`${share.title} 공유 취소`} disabled={busy} onClick={() => setDeleting(share)}><Trash2 size={16} /></button></div></section>;
     })}</div> : <section className="prism-setting-card prism-capability-state"><Link2 size={30} /><h2>아직 공개 링크가 없습니다</h2><p>대화에서 공유 버튼을 누르면 해당 시점의 대화를 링크로 공유할 수 있습니다.</p><button className="prism-action-button" onClick={() => onNavigate('/history')}>내 대화 보기 <ChevronRight size={15} /></button></section>}
-    <p className="prism-subtle-note">공개 링크는 생성 당시의 대화 사본입니다. 공유를 취소하면 해당 링크로 대화를 읽을 수 없습니다.</p>
+    <p className="prism-subtle-note">새 공개 링크는 기본적으로 7일 후 만료됩니다. 기존 링크의 만료 설정은 유지되며, 자동 만료가 없는 링크에는 위에서 만료 기간을 지정할 수 있습니다. 공유 취소·만료 이후에는 링크를 다시 열 수 없지만, 이미 복사하거나 저장한 내용은 회수되지 않습니다.</p>
     <Confirmation open={deleting !== null} onOpenChange={(open) => { if (!open && !busy) setDeleting(null); }} title="공유를 취소할까요?" description="링크가 비활성화됩니다. 내 계정의 원래 대화는 유지됩니다." busy={busy} confirmLabel="공유 취소" onConfirm={async () => { if (!deleting) return; setBusy(true); try { await request(`shares/${encodeURIComponent(deleting.id)}`, { method: 'DELETE' }); setShares((old) => old?.filter((share) => share.id !== deleting.id) || []); setDeleting(null); onNotice?.('공개 링크를 취소했습니다.'); } catch (cause) { setError(cause instanceof Error ? cause.message : '공유를 취소하지 못했습니다.'); setDeleting(null); } finally { setBusy(false); } }} />
   </>;
 }

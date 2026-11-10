@@ -6,7 +6,8 @@ import ts from 'typescript';
 
 const output = new URL('../.sites-runtime/browser-tests/', import.meta.url);
 await mkdir(output, { recursive: true });
-const source = await readFile(new URL('../lib/browser-workspace.ts', import.meta.url), 'utf8');
+const source = (await readFile(new URL('../lib/browser-workspace.ts', import.meta.url), 'utf8')).replaceAll("'./request-lease'", "'./request-lease.mjs'");
+await writeFile(new URL('request-lease.mjs', output), ts.transpileModule(await readFile(new URL('../lib/request-lease.ts', import.meta.url), 'utf8'), { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText);
 await writeFile(new URL('browser-workspace.mjs', output), ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText);
 const { normalizeBrowserUrl, browserlessEndpoint, handleBrowser, BROWSER_CAPTURE_PROGRAM } = await import(new URL('browser-workspace.mjs', output));
 const configured = { BROWSERLESS_API_TOKEN: 'unit-test-secret', BROWSERLESS_EGRESS_POLICY_VERIFIED: 'true' };
@@ -21,7 +22,7 @@ const schema = await readFile(new URL('../drizzle/0005_media_and_browser.sql', i
 function fixture(t) {
   const sqlite = new DatabaseSync(':memory:');
   sqlite.exec(schema);
-  sqlite.exec('CREATE TABLE rate_limits (key TEXT PRIMARY KEY,count INTEGER NOT NULL,expires_at INTEGER NOT NULL)');
+  sqlite.exec('CREATE TABLE rate_limits (key TEXT PRIMARY KEY,count INTEGER NOT NULL,expires_at INTEGER NOT NULL,lease_token TEXT)');
   const sql = { prepare(query) { let bindings = []; return {
     bind(...values) { bindings = values; return this; },
     async first() { return sqlite.prepare(query).get(...bindings) || null; },
@@ -95,7 +96,7 @@ test('provider errors release the active lock and do not save a successful-looki
 test('daily visit cap blocks provider access and unsafe upstream redirects cannot enter history', async t => {
   const { sqlite, call } = fixture(t);
   const day = Math.floor(Date.now() / 86400000);
-  sqlite.prepare('INSERT INTO rate_limits VALUES (?,5,?)').run('browser:day:user:alice:' + day, (day + 1) * 86400000);
+  sqlite.prepare('INSERT INTO rate_limits (key,count,expires_at) VALUES (?,5,?)').run('browser:day:user:alice:' + day, (day + 1) * 86400000);
   let calls = 0;
   globalThis.fetch = async url => { const dns = dnsResponse(url); if (dns) return dns; calls += 1; return Response.json({ url: 'http://127.0.0.1/', title: 'Private', text: 'Private data' }); };
   assert.equal((await call('POST', 'alice', undefined, { url: 'https://example.com/' }, configured)).status, 429);

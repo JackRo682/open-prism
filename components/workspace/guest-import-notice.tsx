@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { clearGuestSession, readGuestSession } from '../../lib/guest-session';
 
-type ImportableSession = { id: string; messages: { role: 'user' | 'assistant'; content: string }[] };
+type ImportableSession = { id: string; messages: { role: 'user' | 'assistant'; content: string; model?: string }[] };
 
 export function GuestImportNotice({ onImported }: { onImported: (conversationId: string) => void }) {
   const [session, setSession] = useState<ImportableSession | null>(null);
@@ -21,7 +21,9 @@ export function GuestImportNotice({ onImported }: { onImported: (conversationId:
       for (let index = 0; index + 1 < stored.messages.length; index += 2) {
         const question = stored.messages[index], answer = stored.messages[index + 1];
         if (question.role !== 'user' || answer.role !== 'assistant' || !question.content.trim() || !answer.content.trim() || answer.status !== 'complete') continue;
-        complete.push({ role: 'user', content: question.content }, { role: 'assistant', content: answer.content });
+        complete.push({ role: 'user', content: question.content }, { role: 'assistant', content: answer.content,
+          ...(answer.model ? { model: answer.model } : {}),
+        });
       }
       if (complete.length) setSession({ id: stored.id, messages: complete });
     }

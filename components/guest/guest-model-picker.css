@@ -1,0 +1,135 @@
+.prism-guest .pg-model-picker {
+  --pg-picker-surface: #1f1f1f;
+  --pg-picker-text: #e3e3e3;
+  --pg-picker-muted: rgb(255 255 255 / 55%);
+  --pg-picker-signin: #171717;
+  width: 256px;
+  max-width: calc(100vw - 24px);
+  max-height: min(var(--radix-dropdown-menu-content-available-height, 100dvh), calc(100dvh - 24px));
+  display: flex;
+  flex-direction: column;
+  padding: 8px;
+  border: 0;
+  border-radius: 20px;
+  background: var(--pg-picker-surface);
+  color: var(--pg-picker-text);
+  box-shadow: 0 4px 18px rgb(0 0 0 / 18%);
+  overflow: hidden;
+  outline: none;
+  z-index: 85;
+  font-family: 'Google Sans Flex', 'Google Sans', Arial, sans-serif;
+  text-align: left;
+  transform-origin: var(--radix-dropdown-menu-content-transform-origin);
+}
+
+html[data-theme='light'] .prism-guest .pg-model-picker {
+  --pg-picker-surface: var(--pg-surface);
+  --pg-picker-text: var(--pg-text);
+  --pg-picker-muted: var(--pg-muted);
+  --pg-picker-signin: #e4e7ed;
+  box-shadow: 0 4px 18px rgb(0 0 0 / 12%);
+}
+
+.prism-guest .pg-model-picker[data-state='open'] {
+  animation: pg-model-picker-enter 120ms cubic-bezier(0, 0, .2, 1) both;
+}
+
+.prism-guest .pg-model-picker[data-state='closed'] {
+  animation: pg-model-picker-exit 90ms cubic-bezier(.4, 0, 1, 1) both;
+  pointer-events: none;
+}
+
+.prism-guest .pg-model-picker-trigger[data-state='open'] {
+  background: var(--pg-hover);
+  color: var(--pg-text);
+}
+
+.prism-guest .pg-model-picker-options {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--pg-border) transparent;
+}
+
+.prism-guest .pg-model-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 54px;
+  padding: 8px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  outline: none;
+  text-decoration: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.prism-guest .pg-model-picker-item > svg {
+  flex: 0 0 20px;
+  width: 20px;
+}
+
+.prism-guest .pg-model-picker-label {
+  flex: 1;
+  min-width: 0;
+}
+
+.prism-guest .pg-model-picker-label strong,
+.prism-guest .pg-model-picker-label small {
+  display: block;
+  margin: 0;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 17px;
+}
+
+.prism-guest .pg-model-picker-label strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prism-guest .pg-model-picker-label small {
+  color: var(--pg-picker-muted);
+}
+
+.prism-guest .pg-model-picker-item[data-disabled] {
+  opacity: .38;
+  cursor: default;
+}
+
+.prism-guest .pg-model-picker-item:not([data-disabled]):hover,
+.prism-guest .pg-model-picker-item:not([data-disabled]):focus-visible {
+  background: var(--pg-hover);
+}
+
+.prism-guest .pg-model-picker-item:focus-visible {
+  outline: 2px solid var(--pg-purple);
+  outline-offset: -2px;
+}
+
+.prism-guest .pg-model-picker-signin {
+  flex: 0 0 auto;
+  background: var(--pg-picker-signin);
+}
+
+@keyframes pg-model-picker-enter {
+  from { opacity: 0; transform: scale(.96); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes pg-model-picker-exit {
+  from { opacity: 1; transform: scale(1); }
+  to { opacity: 0; transform: scale(.96); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .prism-guest .pg-model-picker[data-state] { animation: none; }
+}

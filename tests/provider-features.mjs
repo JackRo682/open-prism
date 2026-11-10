@@ -1,7 +1,9 @@
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { crc32, deflateSync } from 'node:zlib';
 import ts from 'typescript';
+import { imageFixtures } from './fixtures/upload-images.mjs';
 
 const directory = new URL('../.sites-runtime/provider-feature-tests/', import.meta.url);
 await mkdir(directory, { recursive: true });
@@ -24,6 +26,20 @@ const mp4 = new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112, 105, 115, 111, 109,
 const mp3 = new Uint8Array([73, 68, 51, 4, 0, 0, 0, 0, 0, 0]);
 const encode = bytes => Buffer.from(bytes).toString('base64');
 const sse = events => new Response(events.map(event => 'data:' + JSON.stringify(event) + '\r\n\r\n').join(''), { headers: { 'Content-Type': 'text/event-stream' } });
+
+function pngChunk(type, data) {
+  const header = Buffer.alloc(8), trailer = Buffer.alloc(4);
+  header.writeUInt32BE(data.length); header.write(type, 4, 'ascii');
+  trailer.writeUInt32BE(crc32(Buffer.concat([Buffer.from(type), data])));
+  return Buffer.concat([header, data, trailer]);
+}
+function rasterPng({ width = 2, height = 2, indexed = true, raw = Buffer.from([0, 0, 0, 2, 0, 0]), compressed = deflateSync(raw) } = {}) {
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width); header.writeUInt32BE(height, 4); header[8] = 8; header[9] = indexed ? 3 : 0;
+  return new Uint8Array(Buffer.concat([Buffer.from(png.subarray(0, 8)), pngChunk('IHDR', header),
+    ...(indexed ? [pngChunk('PLTE', Buffer.from([128, 128, 128]))] : []),
+    pngChunk('IDAT', compressed), pngChunk('IEND', Buffer.alloc(0))]));
+}
 
 test('capabilities are configuration-driven; missing Google key never advertises video or music', () => {
   assert.deepEqual(getWorkspaceCapabilities({}), { webResearch: false, image: false, video: false, music: false, remoteBrowser: false });
@@ -191,6 +207,42 @@ test('provider denial and malformed output never return synthetic media or echoe
   await assert.rejects(generateImage({ OPENAI_API_KEY: 'test-key' }, { prompt: 'Generate' }, signal()), error => error.code === 'MEDIA_PROVIDER_403' && !error.message.includes('echoed'));
   globalThis.fetch = async () => Response.json({ data: [{ b64_json: encode(new TextEncoder().encode('<html>not an image</html>')) }] });
   await assert.rejects(generateImage({ OPENAI_API_KEY: 'test-key' }, { prompt: 'Generate' }, signal()), error => error.code === 'INVALID_MEDIA_OUTPUT');
+});
+
+test('generated PNGs preserve complete raster and filtered palette checks with a separate 4096px output budget', async () => {
+  const valid = rasterPng();
+  const compressed = deflateSync(Buffer.from([0, 0, 0, 2, 0, 0]));
+  for (const malformed of [
+    rasterPng({ raw: Buffer.from([0, 0, 0, 2, 0, 1]) }),
+    rasterPng({ compressed: compressed.subarray(0, compressed.length - 1) }),
+  ]) {
+    assert.deepEqual(referenceDimensions(malformed, 'image/png'), { width: 2, height: 2 }, 'container and CRCs remain valid');
+    globalThis.fetch = async () => Response.json({ data: [{ b64_json: encode(malformed) }] });
+    await assert.rejects(generateImage({ OPENAI_API_KEY: 'test-key' }, { prompt: 'Generate' }, signal()), error => error.code === 'INVALID_MEDIA_OUTPUT');
+  }
+  for (const output of [valid, rasterPng({ width: 2050, height: 1, indexed: false, raw: Buffer.alloc(2051) })]) {
+    globalThis.fetch = async () => Response.json({ data: [{ b64_json: encode(output) }] });
+    assert.deepEqual((await generateImage({ OPENAI_API_KEY: 'test-key' }, { prompt: 'Generate' }, signal())).bytes, output);
+  }
+});
+
+test('reference JPEGs reject zero quantizers and oversubscribed Huffman trees before a provider call', async () => {
+  const zeroQuantizer = Buffer.from(imageFixtures.jpeg, 'base64');
+  const quantizer = zeroQuantizer.indexOf(Buffer.from([255, 219]));
+  assert.ok(quantizer > 0); zeroQuantizer[quantizer + 5] = 0;
+  const oversubscribed = Buffer.from(imageFixtures.jpeg, 'base64');
+  const table = oversubscribed.indexOf(Buffer.from([255, 196]));
+  assert.ok(table > 0);
+  const counts = oversubscribed.subarray(table + 5, table + 21), symbols = counts.reduce((total, count) => total + count, 0);
+  assert.ok(symbols >= 3 && symbols <= 256);
+  counts.fill(0); counts[0] = 3; counts[15] = symbols - 3;
+  let calls = 0;
+  globalThis.fetch = async () => { calls++; return Response.json({ data: [{ b64_json: encode(png) }] }); };
+  for (const reference of [zeroQuantizer, oversubscribed]) {
+    assert.equal(referenceDimensions(reference, 'image/jpeg'), null);
+    await assert.rejects(generateImage({ OPENAI_API_KEY: 'test-key' }, { prompt: 'Edit', reference: { bytes: reference, mimeType: 'image/jpeg' } }, signal()), error => error.code === 'INVALID_REFERENCE_IMAGE');
+  }
+  assert.equal(calls, 0);
 });
 
 test('video uses current Gemini Omni URI jobs with real aspect and reference-image parameters', async () => {

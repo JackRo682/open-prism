@@ -1,0 +1,37 @@
+.prism-chat-loading {
+  width: min(100%, 820px);
+  min-height: 320px;
+  margin: 0 auto;
+  padding: 32px 24px;
+}
+.prism-chat-skeleton-prompt {
+  width: 54%;
+  height: 64px;
+  margin: 0 0 56px auto;
+  border-radius: 24px 4px 24px 24px;
+  background: var(--surface-2, rgba(128, 128, 128, .12));
+}
+.prism-chat-skeleton-answer { display: flex; align-items: flex-start; gap: 18px; }
+.prism-chat-skeleton-answer > div { flex: 1; padding-top: 4px; }
+.prism-chat-skeleton-answer i {
+  display: block;
+  height: 14px;
+  margin-bottom: 17px;
+  border-radius: 8px;
+  background: var(--surface-2, rgba(128, 128, 128, .12));
+}
+.prism-chat-skeleton-answer i:nth-child(2) { width: 92%; }
+.prism-chat-skeleton-answer i:nth-child(3) { width: 96%; }
+.prism-chat-skeleton-answer i:last-child { width: 65%; }
+.prism-chat-load-error { padding: 48px 0; text-align: center; color: var(--muted); }
+.prism-chat-load-error > svg { margin: 0 auto 16px; }
+.prism-chat-load-error h1 { margin: 0 0 12px; font-size: 20px; color: var(--text); }
+.prism-chat-load-error p { margin: 0 0 24px; line-height: 1.6; overflow-wrap: anywhere; }
+.prism-chat-load-error > div { display: flex; justify-content: center; gap: 12px; flex-wrap: wrap; }
+.prism-history-status { display: flex; align-items: center; gap: 8px; padding: 12px; color: var(--muted); font-size: 13px; line-height: 1.5; }
+.prism-history-error { flex-wrap: wrap; }
+.prism-history-error button { padding: 4px 0; color: var(--text); text-decoration: underline; }
+@media (max-width: 767px) {
+  .prism-chat-loading { padding: 24px 16px; }
+  .prism-chat-skeleton-prompt { width: 72%; }
+}

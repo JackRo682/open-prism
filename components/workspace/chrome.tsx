@@ -1,18 +1,39 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Dialog, DropdownMenu } from 'radix-ui';
 import { Check, Download, LoaderCircle, Menu, PenLine, Settings, X } from 'lucide-react';
+import { ConversationActions } from './conversation-actions';
 
-export function PrismMark() {
-  return <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true"><defs><linearGradient id="prism-spectrum" x1="3" y1="2" x2="21" y2="22" gradientUnits="userSpaceOnUse"><stop stopColor="#75adff"/><stop offset=".34" stopColor="#a789f5"/><stop offset=".61" stopColor="#f3b8d0"/><stop offset=".84" stopColor="#e0cf8c"/><stop offset="1" stopColor="#70c7a1"/></linearGradient></defs><path d="M12 1.5C13.5 7.8 16.2 10.5 22.5 12C16.2 13.5 13.5 16.2 12 22.5C10.5 16.2 7.8 13.5 1.5 12C7.8 10.5 10.5 7.8 12 1.5Z" fill="url(#prism-spectrum)"/></svg>;
-}
+export { PrismMark } from '../brand/prism-mark';
 
 type InstallEvent = Event & { prompt(): Promise<void>; userChoice: Promise<{ outcome: string }> };
-export function WorkspaceHeader({ onMenu, onNew, onNotice, showNavigation }: { onMenu(): void; onNew(): void; onNotice(message: string): void; showNavigation: boolean }) {
+type WorkspaceHeaderProps = {
+  onMenu(): void;
+  onNew(): void;
+  onNotice(message: string): void;
+  showNavigation: boolean;
+  conversation?: { id: string; title: string };
+  onRename?(): void;
+  onDelete?(): void;
+  onPin?(): void | Promise<void>;
+  isPinned?: boolean;
+  onDownloadPdf?(): void | Promise<void>;
+  onExportDocs?(): void | Promise<void>;
+  onShare?(): void;
+  shareDisabled?: boolean;
+  exportBusy?: boolean;
+  conversationMenuItems?: ReactNode;
+  conversationActions?: ReactNode;
+  inConversation?: boolean;
+  newDisabled?: boolean;
+};
+export function WorkspaceHeader({ onMenu, onNew, onNotice, showNavigation, conversation, onRename, onDelete, onPin, isPinned, onDownloadPdf, onExportDocs, onShare, shareDisabled, exportBusy, conversationMenuItems, conversationActions, inConversation = false, newDisabled = false }: WorkspaceHeaderProps) {
   const install = useRef<InstallEvent | null>(null);
   const [printClean, setPrintClean] = useState(true);
   const [installHelp, setInstallHelp] = useState(false);
+  const activeConversation = inConversation || !!conversation;
+  const hasConversationMenu = !!(conversation && onRename && onDelete);
   useEffect(() => {
     const receive = (event: Event) => { event.preventDefault(); install.current = event as InstallEvent; };
     window.addEventListener('beforeinstallprompt', receive);
@@ -24,15 +45,18 @@ export function WorkspaceHeader({ onMenu, onNew, onNotice, showNavigation }: { o
     catch { onNotice('브라우저 메뉴에서 앱 설치를 선택해주세요.'); }
     finally { install.current = null; }
   }
-  return <header className="gemini-topbar">
+  return <header className="gemini-topbar" data-conversation={activeConversation}>
     <button type="button" className={'gemini-mobile-toggle' + (showNavigation ? ' is-visible' : '')} aria-label="탐색 메뉴 열기" onClick={onMenu}><Menu size={22}/></button>
+    {conversation && <span className="sr-only">{conversation.title}</span>}
     <div className="gemini-top-actions">
-      <button type="button" className="gemini-install" aria-label="앱 설치" onClick={installApp}><Download size={17}/><span>앱 설치</span></button>
-      <div className="gemini-pdf-group">
-        <button type="button" className="gemini-pdf-button" onClick={() => { document.documentElement.dataset.printClean = String(printClean); window.print(); }}>Save as PDF</button>
+      {!activeConversation && <button type="button" className="gemini-install" aria-label="앱 설치" onClick={installApp}><Download size={17}/><span>앱 설치</span></button>}
+      {!activeConversation && <div className="gemini-pdf-group">
+        <button type="button" className="gemini-pdf-button" onClick={() => { void import('../../lib/print-conversation').then(module => module.printConversation(printClean)).catch(failure => onNotice(failure instanceof Error ? failure.message : '인쇄 창을 열지 못했습니다.')); }}>PDF로 저장</button>
         <DropdownMenu.Root><DropdownMenu.Trigger asChild><button type="button" className="gemini-pdf-settings" aria-label="PDF 저장 설정"><Settings size={16}/></button></DropdownMenu.Trigger><DropdownMenu.Portal><DropdownMenu.Content className="prism-tool-menu" sideOffset={8} align="end" collisionPadding={8}><DropdownMenu.CheckboxItem className="prism-tool-item" checked={printClean} onCheckedChange={setPrintClean}>대화와 본문만 인쇄<DropdownMenu.ItemIndicator><Check size={16}/></DropdownMenu.ItemIndicator></DropdownMenu.CheckboxItem><DropdownMenu.Label className="prism-tool-note">인쇄 창에서 PDF로 저장을 선택하세요.</DropdownMenu.Label></DropdownMenu.Content></DropdownMenu.Portal></DropdownMenu.Root>
-      </div>
-      <button type="button" className="gemini-new-button" onClick={onNew} aria-label="새 채팅"><PenLine size={19}/></button>
+      </div>}
+      {!hasConversationMenu && conversationActions}
+      {conversation && onRename && onDelete && <ConversationActions key={conversation.id} title={conversation.title} variant="header" onRename={onRename} onDelete={onDelete} onPin={onPin} isPinned={isPinned} onDownloadPdf={onDownloadPdf} onExportDocs={onExportDocs} onShare={onShare} shareDisabled={shareDisabled} exportBusy={exportBusy} disabled={newDisabled}>{conversationMenuItems}</ConversationActions>}
+      {!activeConversation && <button type="button" disabled={newDisabled} className="gemini-new-button" onClick={onNew} aria-label="새 채팅" title="새 채팅 (Ctrl+Shift+O)" aria-keyshortcuts="Control+Shift+O Meta+Shift+O"><PenLine size={19}/></button>}
     </div>
     <Dialog.Root open={installHelp} onOpenChange={setInstallHelp}><Dialog.Portal><Dialog.Overlay className="prism-dialog-overlay"/><Dialog.Content className="prism-dialog-content"><div className="prism-dialog-heading"><Dialog.Title>Prism 앱 설치</Dialog.Title><Dialog.Close className="prism-icon" aria-label="닫기"><X size={20}/></Dialog.Close></div><Dialog.Description>브라우저에서 설치 기능을 제공하면 주소 표시줄의 설치 아이콘을 누르세요. Chrome 메뉴의 ‘전송, 저장, 공유’에서도 앱 설치 옵션을 확인할 수 있습니다.</Dialog.Description><p>설치 옵션이 없는 브라우저에서는 이 페이지를 북마크하여 사용할 수 있습니다.</p><Dialog.Close className="prism-primary-button">확인</Dialog.Close></Dialog.Content></Dialog.Portal></Dialog.Root>
   </header>;

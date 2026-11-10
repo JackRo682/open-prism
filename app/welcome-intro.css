@@ -1,0 +1,79 @@
+/* The first paint includes the real greeting and composer. A short bloom adds
+ * depth without holding any content behind hydration or network requests.
+ * Pending and entering intentionally share the same animation: hydration must
+ * not restart a first-paint animation or move an open composer menu. */
+@media (min-width: 769px) {
+  .prism-guest.pg-is-empty .pg-main[data-welcome-phase]::before,
+  .gemini-shell .gemini-workspace[data-welcome-phase][data-glow='true']::before {
+    background:
+      radial-gradient(ellipse min(49vw, 610px) 315px at 50% 63%, rgb(49 55 136 / 66%) 0%, rgb(43 47 116 / 59%) 25%, rgb(31 34 78 / 38%) 57%, transparent 100%),
+      radial-gradient(ellipse 360px 285px at 68% 36%, rgb(29 33 66 / 48%) 0%, rgb(22 25 44 / 22%) 60%, transparent 100%);
+    transform-origin: 50% 65%;
+  }
+
+  html[data-theme='light'] .prism-guest.pg-is-empty .pg-main[data-welcome-phase]::before,
+  html[data-theme='light'] .gemini-shell .gemini-workspace[data-welcome-phase][data-glow='true']::before {
+    background:
+      radial-gradient(ellipse min(49vw, 610px) 315px at 50% 63%, rgb(170 193 255 / 58%) 0%, rgb(197 211 255 / 39%) 36%, rgb(222 228 255 / 19%) 65%, transparent 100%),
+      radial-gradient(ellipse 360px 285px at 68% 36%, rgb(219 216 254 / 27%) 0%, transparent 100%);
+  }
+
+  .prism-guest.pg-is-empty .pg-main[data-welcome-phase='pending']::before,
+  .gemini-shell .gemini-workspace[data-welcome-phase='pending'][data-glow='true']::before,
+  .prism-guest.pg-is-empty .pg-main[data-welcome-phase='entering']::before,
+  .gemini-shell .gemini-workspace[data-welcome-phase='entering'][data-glow='true']::before {
+    animation: prism-welcome-bloom 260ms cubic-bezier(.16, 1, .3, 1) both;
+  }
+
+  /* Controls are visible and focusable from the server render. Opacity alone
+   * avoids creating a new positioning context for the model-picker portal. */
+  .pg-main[data-welcome-phase='pending'] :is(.pg-welcome, .pg-compose-area),
+  .pg-main[data-welcome-phase='entering'] :is(.pg-welcome, .pg-compose-area),
+  .gemini-workspace[data-welcome-phase='pending'] .gemini-welcome-inner > :is(h1, .gemini-compose-wrap, .gemini-mode-switch, .prism-signin-hint),
+  .gemini-workspace[data-welcome-phase='entering'] .gemini-welcome-inner > :is(h1, .gemini-compose-wrap, .gemini-mode-switch, .prism-signin-hint) {
+    animation: prism-welcome-content 180ms ease-out both;
+    visibility: visible;
+  }
+
+  /* Intentional interaction always wins over decoration. */
+  .pg-main[data-welcome-phase='pending'] .pg-compose-area:focus-within,
+  .pg-main[data-welcome-phase='entering'] .pg-compose-area:focus-within,
+  .gemini-workspace[data-welcome-phase='pending'] .gemini-welcome-inner > :is(.gemini-compose-wrap, .gemini-mode-switch, .prism-signin-hint):focus-within,
+  .gemini-workspace[data-welcome-phase='entering'] .gemini-welcome-inner > :is(.gemini-compose-wrap, .gemini-mode-switch, .prism-signin-hint):focus-within {
+    animation: none;
+    opacity: 1;
+    visibility: visible;
+    transform: none;
+  }
+}
+
+@keyframes prism-welcome-bloom {
+  0% { opacity: .35; transform: scale(.92, .94); }
+  100% { opacity: 1; transform: none; }
+}
+
+@keyframes prism-welcome-content {
+  from { opacity: .88; }
+  to { opacity: 1; }
+}
+
+/* CSS handles the initial server render too, before the hook can read the
+ * preference. Reduced motion means immediate content, not a shorter delay. */
+@media (prefers-reduced-motion: reduce) {
+  .pg-main[data-welcome-phase]::before,
+  .gemini-workspace[data-welcome-phase]::before {
+    animation: none !important;
+    transform: none !important;
+  }
+  .prism-guest.pg-is-empty .pg-main[data-welcome-phase]::before,
+  .gemini-workspace[data-welcome-phase][data-glow='true']::before {
+    opacity: 1 !important;
+  }
+  .pg-main[data-welcome-phase] :is(.pg-welcome, .pg-compose-area),
+  .gemini-workspace[data-welcome-phase] .gemini-welcome-inner > :is(h1, .gemini-compose-wrap, .gemini-mode-switch, .prism-signin-hint) {
+    animation: none !important;
+    opacity: 1 !important;
+    visibility: visible !important;
+    transform: none !important;
+  }
+}

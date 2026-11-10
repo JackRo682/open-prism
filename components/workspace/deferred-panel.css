@@ -1,0 +1,18 @@
+.prism-deferred-panel {
+  display: grid;
+  align-content: center;
+  gap: 18px;
+  width: 100%;
+  min-height: 160px;
+  padding: 32px;
+  color: var(--prism-muted, #9b9fa9);
+}
+
+.prism-deferred-panel > p { margin: 0; font-size: 14px; line-height: 1.6; }
+.prism-deferred-panel > button { justify-self: start; }
+.prism-deferred-skeleton { display: grid; gap: 12px; max-width: 600px; }
+.prism-deferred-skeleton i { height: 10px; width: 90%; border-radius: 8px; background: currentColor; opacity: .12; }
+.prism-deferred-skeleton i:nth-child(2) { width: 72%; }
+.prism-deferred-skeleton i:nth-child(3) { width: 48%; }
+.prism-deferred-dialog > h2 { margin: 0; font-size: 20px; font-weight: 500; }
+.prism-deferred-dialog > .prism-deferred-panel { min-height: 120px; padding: 20px 0; }

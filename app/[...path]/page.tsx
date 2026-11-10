@@ -1,8 +1,10 @@
+import { env } from 'cloudflare:workers';
 import { redirect } from 'next/navigation';
 import Workspace from '../workspace';
 import GuestWorkspace from '../../components/guest/guest-workspace';
 import PublicPage, { PublicSharePage } from '../public-page';
 import { chatGPTSignInPath, getChatGPTUser, requireChatGPTUser } from '../chatgpt-auth';
+import { loadWorkspaceStartup } from '../../lib/workspace-startup';
 
 export const dynamic = 'force-dynamic';
 
@@ -22,6 +24,7 @@ export default async function Page({ params }: { params: Promise<{ path: string[
   if (['login', 'signup', 'auth', 'forgot-password'].includes(path[0]) && path.length === 1) {
     redirect(user ? '/chat' : chatGPTSignInPath('/chat'));
   }
-  if (!user) await requireChatGPTUser(pathname);
-  return <Workspace />;
+  const authenticatedUser = user ?? await requireChatGPTUser(pathname);
+  const startup = await loadWorkspaceStartup(authenticatedUser, env);
+  return <Workspace key={authenticatedUser.userId} initialPathname={pathname} initialBootstrap={startup.bootstrap} initialChats={startup.chats} />;
 }

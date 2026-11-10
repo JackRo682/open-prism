@@ -62,6 +62,7 @@
   color: inherit;
   font: inherit;
   text-align: start;
+  text-decoration: none;
   white-space: nowrap;
   cursor: pointer;
   user-select: none;
@@ -90,6 +91,122 @@
 .prism-location-note { display: grid; gap: 7px; padding: 12px; font-size: 13px; line-height: 1.6; }
 .prism-location-note > strong { font-size: 14px; font-weight: 500; }
 .prism-location-note > small { color: var(--prism-muted, #9aa0a6); font-size: 11px; }
+
+.gemini-shell .gemini-account:hover,
+.gemini-shell .gemini-account[data-state='open'] { background: var(--prism-hover); }
+.prism-account-popover {
+  z-index: 112;
+  box-sizing: border-box;
+  inline-size: 400px;
+  max-inline-size: calc(100vw - 24px);
+  max-block-size: min(var(--radix-popover-content-available-height, 100dvh), calc(100dvh - 24px));
+  padding: 16px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  border: 0;
+  border-radius: 28px;
+  outline: none;
+  background: var(--prism-surface, #1f1f1f);
+  color: var(--prism-ink, #e3e3e3);
+  box-shadow: 0 4px 20px rgb(0 0 0 / 28%);
+  font: 400 14px / 20px Arial, 'Noto Sans KR', sans-serif;
+  transform-origin: var(--radix-popover-content-transform-origin, bottom left);
+}
+.prism-account-popover[data-state='open'] { animation: prism-menu-enter 140ms cubic-bezier(0, 0, .2, 1); }
+.prism-account-popover-head { display: flex; align-items: center; justify-content: flex-end; block-size: 24px; }
+.prism-account-close {
+  display: grid;
+  place-items: center;
+  flex: 0 0 32px;
+  inline-size: 32px;
+  block-size: 32px;
+  margin-inline-end: -4px;
+  padding: 0;
+  border-radius: 50%;
+  color: var(--prism-ink);
+}
+.prism-account-close:hover { background: var(--prism-hover); }
+.prism-account-identity {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-block-size: 102px;
+  margin-block-start: 12px;
+  padding: 12px;
+  border-radius: 28px;
+  background: var(--prism-page, #0f0f0f);
+}
+.prism-account-avatar {
+  display: grid;
+  place-items: center;
+  flex: 0 0 64px;
+  inline-size: 64px;
+  block-size: 64px;
+  border: 3px solid var(--prism-page, #0f0f0f);
+  border-radius: 50%;
+  background: #ce4f7a;
+  color: #fff;
+  box-shadow: 0 0 0 2px var(--prism-accent, #a8c7fa);
+  font-size: 38px;
+  line-height: 1;
+}
+.prism-account-details { flex: 1; min-inline-size: 0; }
+.prism-account-details > strong {
+  display: block;
+  overflow: hidden;
+  color: inherit;
+  font-size: 20px;
+  font-weight: 500;
+  line-height: 26px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.prism-account-details > p {
+  margin: 2px 0 0;
+  overflow: hidden;
+  color: var(--prism-muted, #b6b9bd);
+  font-size: 14px;
+  line-height: 20px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.prism-account-plan-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; margin-block-start: 6px; }
+.prism-account-plan {
+  max-inline-size: 100%;
+  padding: 0 6px;
+  overflow: hidden;
+  border: 1px solid var(--prism-accent, #a8c7fa);
+  border-radius: 9999px;
+  color: var(--prism-accent, #a8c7fa);
+  font-size: 11px;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.prism-account-upgrade { display: inline-flex; align-items: center; gap: 2px; padding: 0; color: var(--prism-accent); font-size: 11px; line-height: 18px; }
+.prism-account-upgrade:hover { text-decoration: underline; text-underline-offset: 3px; }
+.prism-account-actions { display: grid; gap: 12px; margin-block-start: 12px; }
+.prism-account-action {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  box-sizing: border-box;
+  inline-size: 100%;
+  min-block-size: 56px;
+  padding: 14px 20px;
+  border: 0;
+  border-radius: 9999px;
+  background: var(--prism-page, #0f0f0f);
+  color: inherit;
+  font: inherit;
+  text-align: start;
+  text-decoration: none;
+}
+.prism-account-action:hover { background: var(--prism-hover, rgb(255 255 255 / 8%)); }
+.prism-account-footer { display: flex; align-items: center; justify-content: center; gap: 12px; min-block-size: 24px; margin-block-start: 16px; color: var(--prism-muted); }
+.prism-account-footer button { padding: 2px 0; color: inherit; font-size: 11px; line-height: 20px; }
+.prism-account-footer button:hover { text-decoration: underline; text-underline-offset: 3px; }
 
 @keyframes prism-menu-enter {
   from { opacity: 0; transform: scale(.98); }
@@ -277,6 +394,7 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .prism-settings-menu[data-state='open'],
+  .prism-account-popover[data-state='open'],
   .prism-dialog-overlay { animation: none; }
   .prism-switch-thumb { transition: none; }
 }

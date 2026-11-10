@@ -1,5 +1,7 @@
 'use client';
 
+import './workspace-features.css';
+
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { AlertDialog } from 'radix-ui';
 import { AlertCircle, ArrowLeft, ArrowUpRight, Check, Copy, Download, FileText, LoaderCircle, NotebookPen, Paperclip, Plus, RefreshCw, Save, Search, Trash2 } from 'lucide-react';

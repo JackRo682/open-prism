@@ -1,8 +1,11 @@
+import { acquireRequestLease, releaseRequestLease } from './request-lease';
 import { BillingError } from './billing';
 import { reserveMedia } from './beta';
 import { getWorkspaceCapabilities, WorkspaceToolError, betaDailyLimit, MEDIA_RESERVATION_MICROS } from './workspace-tools';
 import { generateImage, generateMusic, createVideo, pollVideo, downloadVideo, mediaModel, validateMediaInput, MAX_REFERENCE_BYTES, type MediaAsset, type MediaInput, type VideoJob } from './media-provider';
-import { isOwnedObjectKey, safeDownloadName, validReferenceName, PRIVATE_FILE_HEADERS } from './upload-security';
+import { isOwnedObjectKey, safeDownloadName, attachmentDisposition, validReferenceName, PRIVATE_FILE_HEADERS } from './upload-security';
+import { readSingleFileUpload } from './upload-validation';
+import { trackProviderAttempt } from './security-monitoring';
 
 type MediaRow = {
  id:string; user_id:string; kind:'image'|'video'|'music'|'reference'; prompt:string; model:string;
@@ -11,7 +14,14 @@ type MediaRow = {
 };
 const json = (data:unknown,status=200) => Response.json(data,{status});
 const publicAsset = (row:MediaRow) => ({id:row.id,kind:row.kind,prompt:row.prompt,model:row.model,status:row.status,
- mimeType:row.mime_type,url:row.status==='complete'?'/api/media/'+row.id+'/content':undefined,error:row.error,createdAt:row.created_at});
+ // Older rows may contain an unexpected transport exception. Never replay those diagnostics.
+ mimeType:row.mime_type,url:row.status==='complete'?'/api/media/'+row.id+'/content':undefined,
+ error:row.error?'미디어 작업을 완료하지 못했습니다. 연결 상태를 확인한 뒤 다시 시도해주세요.':null,createdAt:row.created_at});
+function publicMediaError(error:unknown):BillingError|WorkspaceToolError {
+ if(error instanceof BillingError||error instanceof WorkspaceToolError)return error;
+ if(error instanceof Error&&['AbortError','TimeoutError'].includes(error.name))return new WorkspaceToolError('미디어 요청이 취소되었거나 시간이 초과되었습니다.',504,'MEDIA_TIMEOUT');
+ return new WorkspaceToolError('미디어 요청을 처리하지 못했습니다. 잠시 후 다시 시도해주세요.',502,'MEDIA_UNAVAILABLE');
+}
 function byteRange(value:string,size:number):{offset:number;length:number}|null {
  const match=/^bytes=(\d*)-(\d*)$/.exec(value.trim());
  if(!match||(!match[1]&&!match[2])||!Number.isSafeInteger(size)||size<1)return null;
@@ -49,8 +59,8 @@ export async function handleMedia(req:Request,path:string[],sql:D1Database,owner
  }
  if(req.method==='POST'&&path.length===2&&path[1]==='reference'){
   if(!env.BUCKET)throw new BillingError('파일 저장소를 사용할 수 없습니다.',503);
-  const form=await req.formData(),file=form.get('file');
-  if(!(file instanceof File)||form.getAll('file').length!==1||file.size>MAX_REFERENCE_BYTES||file.size<1||!validReferenceName(file.name,file.type))throw new BillingError('4 MB 이하의 PNG, JPEG, WebP 이미지를 선택해주세요. 파일 확장자와 실제 형식이 일치해야 합니다.',400);
+  const file=await readSingleFileUpload(req,MAX_REFERENCE_BYTES);
+  if(file.size<1||!validReferenceName(file.name,file.type))throw new BillingError('4 MB 이하의 PNG, JPEG, WebP 이미지를 선택해주세요. 파일 확장자와 실제 형식이 일치해야 합니다.',400);
   const bytes=new Uint8Array(await file.arrayBuffer());
   await validateMediaInput({prompt:'참고 이미지',reference:{bytes,mimeType:file.type as 'image/png'|'image/jpeg'|'image/webp'}});
   if(req.signal.aborted)throw new BillingError('요청이 취소되었습니다.',408);
@@ -82,7 +92,7 @@ export async function handleMedia(req:Request,path:string[],sql:D1Database,owner
    const reference=await sql.prepare("SELECT * FROM media_assets WHERE id=? AND user_id=? AND kind='reference'").bind(body.referenceId,owner).first<MediaRow>();
    const object=isOwnedObjectKey(reference?.object_key,owner,'references')?await env.BUCKET.get(reference!.object_key!):null;
    if(!reference||!object)throw new BillingError('참고 이미지를 찾을 수 없습니다. 다시 업로드해주세요.',404);
-   if(reference.size<1||reference.size>MAX_REFERENCE_BYTES||object.size>MAX_REFERENCE_BYTES)throw new BillingError('참고 이미지를 다시 업로드해주세요.',400);
+   if(!Number.isSafeInteger(reference.size)||reference.size<1||reference.size>MAX_REFERENCE_BYTES||!Number.isSafeInteger(object.size)||object.size<1||object.size>MAX_REFERENCE_BYTES||reference.size!==object.size)throw new BillingError('참고 이미지를 다시 업로드해주세요.',400);
    input.reference={bytes:new Uint8Array(await object.arrayBuffer()),mimeType:reference.mime_type as 'image/png'|'image/jpeg'|'image/webp',name:reference.prompt};
   }
   // Reject invalid references and model configuration before reserving money or creating a job.
@@ -99,20 +109,20 @@ export async function handleMedia(req:Request,path:string[],sql:D1Database,owner
    if(signal.aborted)throw new BillingError('요청이 취소되었습니다. 생성 요청을 보내지 않았습니다.',408);
    providerStarted=true;
    if(kind==='video'){
-    const result=await createVideo(env,input,signal);
+    const result=await trackProviderAttempt(sql,usageId,()=>createVideo(env,input,signal));
     if(result.status==='processing'){
      await sql.prepare('UPDATE media_assets SET job=? WHERE id=? AND user_id=?').bind(JSON.stringify(result.job),id,owner).run();
      return json(publicAsset(row),202);
     }
     return json(publicAsset(await finalize(env,sql,owner,row,result.asset)),201);
    }
-   const asset=kind==='image'?await generateImage(env,input,signal):await generateMusic(env,input,signal);
+   const asset=await trackProviderAttempt(sql,usageId,()=>kind==='image'?generateImage(env,input,signal):generateMusic(env,input,signal));
    return json(publicAsset(await finalize(env,sql,owner,row,asset)),201);
   }catch(error){
-   const message=error instanceof Error?error.message:'미디어 생성 요청을 처리하지 못했습니다.';
+   const safeError=publicMediaError(error),message=safeError.message;
    await sql.batch([sql.prepare("UPDATE media_assets SET status='error',error=?,updated_at=? WHERE id=? AND user_id=?").bind(message,Date.now(),id,owner),
     sql.prepare("UPDATE usage SET status='error',error=?,duration=?,reserved_amount=CASE WHEN ? THEN reserved_amount ELSE 0 END WHERE id=? AND user_id=?").bind(message,Date.now()-now,Number(providerStarted),usageId,owner)]);
-   throw error;
+   throw safeError;
   }
  }
  if(path.length>=2){
@@ -127,6 +137,7 @@ export async function handleMedia(req:Request,path:string[],sql:D1Database,owner
    const object=await env.BUCKET?.get(row.object_key,range?{range}:undefined);
    if(!object)return json({error:'파일을 찾을 수 없습니다.'},404);
    const headers:Record<string,string>={...PRIVATE_FILE_HEADERS,'Content-Type':row.mime_type,'Accept-Ranges':'bytes'};
+   if(new URL(req.url).searchParams.get('download')==='1')headers['Content-Disposition']=attachmentDisposition(row.kind==='reference'?row.prompt:`${row.kind}-${row.id}.${row.mime_type==='image/png'?'png':row.mime_type==='video/mp4'?'mp4':'mp3'}`);
    if(range){headers['Content-Range']=`bytes ${range.offset}-${range.offset+range.length-1}/${row.size}`;headers['Content-Length']=String(range.length);}
    else headers['Content-Length']=String(row.size);
    return new Response(object.body,{status:headers['Content-Range']?206:200,headers});
@@ -134,15 +145,14 @@ export async function handleMedia(req:Request,path:string[],sql:D1Database,owner
   if(req.method==='GET'&&path.length===2)return json(publicAsset(row));
   if(req.method==='POST'&&path.length===3&&path[2]==='refresh'){
    if(row.status!=='processing'||!row.job)return json(publicAsset(row));
-   const lockKey=`media-poll:${row.id}`,now=Date.now();
-   const lock=await sql.prepare('INSERT INTO rate_limits (key,count,expires_at) VALUES (?,1,?) ON CONFLICT(key) DO UPDATE SET expires_at=excluded.expires_at WHERE expires_at<? RETURNING key').bind(lockKey,now+60000,now).first();
+   const lock=await acquireRequestLease(sql,`media-poll:${row.id}`,60000);
    if(!lock)return json(publicAsset(row),202);
    try{
     const job=JSON.parse(row.job) as VideoJob,signal=AbortSignal.any([req.signal,AbortSignal.timeout(45000)]);
     if(await pollVideo(env,job,signal)==='processing')return json(publicAsset(row),202);
     return json(publicAsset(await finalize(env,sql,owner,row,await downloadVideo(env,job,signal))));
    }catch(error){
-    const message=error instanceof Error?error.message:'동영상 상태를 확인하지 못했습니다.';
+    const message=publicMediaError(error).message;
     if(error instanceof WorkspaceToolError&&error.code==='VIDEO_PROCESSING_FAILED'){
      await sql.batch([sql.prepare("UPDATE media_assets SET status='error',error=?,job=NULL,updated_at=? WHERE id=? AND user_id=? AND status='processing'").bind(message,Date.now(),row.id,owner),
       sql.prepare("UPDATE usage SET status='error',error=?,duration=? WHERE id=? AND user_id=? AND status='pending'").bind(message,Date.now()-row.created_at,row.usage_id,owner)]);
@@ -150,7 +160,7 @@ export async function handleMedia(req:Request,path:string[],sql:D1Database,owner
     }
     // Transport failures are retryable; do not discard a paid provider job.
     return json({error:message,id:row.id,status:'processing'},502);
-   }finally{await sql.prepare('DELETE FROM rate_limits WHERE key=?').bind(lockKey).run();}
+   }finally{await releaseRequestLease(sql,lock);}
   }
   if(req.method==='DELETE'&&path.length===2){
    if(row.status==='processing')return json({error:'진행 중인 작업은 완료된 후 삭제해주세요.'},409);

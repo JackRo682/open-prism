@@ -4,6 +4,10 @@ export type GuestMessage = {
   content: string;
   status?: 'complete' | 'streaming' | 'stopped' | 'error';
   error?: string;
+  feedback?: 'up' | 'down' | null;
+  feedbackDetails?: string;
+  model?: string;
+  created_at?: number;
 };
 
 export type GuestSession = {
@@ -12,6 +16,7 @@ export type GuestSession = {
   draft: string;
   savedAt: number;
   hasInteracted: boolean;
+  title?: string;
 };
 
 export const GUEST_SESSION_STORAGE_KEY = 'prism-guest-session';
@@ -27,7 +32,7 @@ export function readGuestSession(): GuestSession | null {
   if (typeof window === 'undefined') return null;
   try {
     const raw = window.sessionStorage.getItem(GUEST_SESSION_STORAGE_KEY);
-    if (!raw || raw.length > 160000) return null;
+    if (!raw || raw.length > 200000) return null;
     const value: unknown = JSON.parse(raw);
     if (!value || typeof value !== 'object') return null;
     const data = value as Record<string, unknown>;
@@ -45,18 +50,29 @@ export function readGuestSession(): GuestSession | null {
       total += item.content.length;
       if (total > 100000) return null;
       const status = item.status === 'streaming' ? 'stopped' : item.status === 'stopped' || item.status === 'error' ? item.status : 'complete';
-      messages.push({ id: item.id, role: expectedRole, content: item.content, status, ...(typeof item.error === 'string' ? { error: item.error.slice(0, 500) } : {}) });
+      messages.push({
+        id: item.id, role: expectedRole, content: item.content, status,
+        ...(typeof item.error === 'string' ? { error: item.error.slice(0, 500) } : {}),
+        ...(expectedRole === 'assistant' && (item.feedback === 'up' || item.feedback === 'down' || item.feedback === null) ? { feedback: item.feedback } : {}),
+        ...(expectedRole === 'assistant' && item.feedback === 'down' && typeof item.feedbackDetails === 'string' && item.feedbackDetails.trim() && item.feedbackDetails.length <= 2000 ? { feedbackDetails: item.feedbackDetails.trim() } : {}),
+        ...(expectedRole === 'assistant' && typeof item.model === 'string' && item.model.length > 0 && item.model.length <= 120 ? { model: item.model } : {}),
+        ...(typeof item.created_at === 'number' && Number.isFinite(item.created_at) && item.created_at > 0 && item.created_at <= Date.now() + 60000 ? { created_at: item.created_at } : {}),
+      });
     }
-    return { id: data.id, messages, draft: data.draft, savedAt: data.savedAt, hasInteracted: data.hasInteracted === true || messages.some(message => message.role === 'assistant' && message.status === 'complete') };
+    return { id: data.id, messages, draft: data.draft, savedAt: data.savedAt, hasInteracted: data.hasInteracted === true || messages.some(message => message.role === 'assistant' && message.status === 'complete'), ...(typeof data.title === 'string' && data.title.trim() ? { title: data.title.trim().slice(0, 120) } : {}) };
   } catch { return null; }
 }
 
-export function writeGuestSession(session: GuestSession): void {
-  if (typeof window === 'undefined') return;
+export function writeGuestSession(session: GuestSession): boolean {
+  if (typeof window === 'undefined') return false;
   try {
-    const messages = session.messages.slice(-40).map(message => ({ ...message, content: message.content.slice(0, 32000) }));
+    const messages = session.messages.slice(-40).map(message => {
+      const { feedbackDetails, ...rest } = message;
+      return { ...rest, content: message.content.slice(0, 32000), ...(message.role === 'assistant' && message.feedback === 'down' && typeof feedbackDetails === 'string' && feedbackDetails.trim() ? { feedbackDetails: feedbackDetails.trim().slice(0, 2000) } : {}) };
+    });
     if (messages[0]?.role === 'assistant') messages.shift();
     while (messages.length > 2 && messages.reduce((total, message) => total + message.content.length, 0) > 100000) messages.splice(0, 2);
-    window.sessionStorage.setItem(GUEST_SESSION_STORAGE_KEY, JSON.stringify({ ...session, version: 1, messages, draft: session.draft.slice(0, 8000), savedAt: Date.now() }));
-  } catch { /* An unavailable browser store must not prevent chatting. */ }
+    window.sessionStorage.setItem(GUEST_SESSION_STORAGE_KEY, JSON.stringify({ ...session, version: 1, messages, draft: session.draft.slice(0, 8000), ...(session.title ? { title: session.title.trim().slice(0, 120) } : {}), savedAt: Date.now() }));
+    return true;
+  } catch { return false; /* An unavailable browser store must not prevent chatting. */ }
 }

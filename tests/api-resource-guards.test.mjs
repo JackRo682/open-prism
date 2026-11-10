@@ -90,20 +90,20 @@ test('admission limits concurrent API preparations while public pages remain acc
 test('readiness requests coalesce, cache only health state, and require current storage/provider configuration', async () => {
   let complete, batches = 0;
   const sql = { prepare: query => query, batch() { batches++; return new Promise(resolve => { complete = resolve; }); } };
-  const env = { DB: sql, BUCKET: {}, OPENAI_API_KEY: 'fixture' };
+  const env = { DB: sql, BUCKET: {}, GEMINI_API_KEY: 'fixture' };
   const probes = Array.from({ length: 20 }, () => checkReadiness(env));
   await Promise.resolve(); assert.equal(batches, 1);
   complete([]);
   assert.deepEqual(await Promise.all(probes), Array.from({ length: 20 }, () => ({ status: 'ready', service: 'open-prism' })));
   assert.equal((await checkReadiness(env)).status, 'ready'); assert.equal(batches, 1);
   assert.deepEqual(await checkReadiness({ ...env, BUCKET: undefined }), { status: 'unavailable', code: 'STORAGE_NOT_READY' });
-  assert.deepEqual(await checkReadiness({ ...env, OPENAI_API_KEY: undefined }), { status: 'unavailable', code: 'PROVIDER_NOT_READY' });
+  assert.deepEqual(await checkReadiness({ ...env, GEMINI_API_KEY: undefined }), { status: 'unavailable', code: 'PROVIDER_NOT_READY' });
 });
 
 test('a stalled readiness batch has a bounded response deadline without spawning replacement batches', async () => {
   let complete, batches = 0;
   const sql = { prepare: query => query, batch() { batches++; return new Promise(resolve => { complete = resolve; }); } };
-  const env = { DB: sql, BUCKET: {}, OPENAI_API_KEY: 'fixture' };
+  const env = { DB: sql, BUCKET: {}, GEMINI_API_KEY: 'fixture' };
   assert.deepEqual(await checkReadiness(env, 5), { status: 'unavailable', code: 'DATABASE_NOT_READY' });
   assert.deepEqual(await checkReadiness(env, 5), { status: 'unavailable', code: 'DATABASE_NOT_READY' });
   assert.equal(batches, 1);

@@ -1,0 +1,325 @@
+.prism-response-actions {
+  margin-top: 8px;
+  color: var(--text-muted, #c4c7c5);
+}
+
+.prism-response-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0;
+  min-height: 32px;
+  margin-left: -7px;
+}
+
+.prism-response-action {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 7px;
+  border: 0;
+  border-radius: 50%;
+  color: #c4c7c5;
+  background: transparent;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.prism-response-action > svg {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  stroke-width: 1.8;
+}
+
+.prism-response-action:hover,
+.prism-response-action[data-state="open"] {
+  background: rgba(227, 227, 227, .09);
+  color: #e3e3e3;
+}
+
+.prism-response-action:focus-visible {
+  outline: 2px solid #a8c7fa;
+  outline-offset: 2px;
+}
+
+.prism-response-action[aria-pressed="true"],
+.prism-response-action[data-copied="true"] {
+  color: #e3e3e3;
+}
+
+.prism-response-action:disabled {
+  opacity: .42;
+  cursor: default;
+  background: transparent;
+}
+
+.prism-response-tooltip {
+  z-index: 140;
+  max-width: min(260px, calc(100vw - 24px));
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: #303134;
+  color: #e3e3e3;
+  line-height: 1.4;
+  font-family: 'Google Sans Flex', 'Google Sans', Arial, 'Noto Sans KR', sans-serif;
+  font-size: 12px;
+  font-weight: 500;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 16%);
+  pointer-events: none;
+  user-select: none;
+}
+
+.prism-response-menu {
+  z-index: 130;
+  box-sizing: border-box;
+  width: 200px;
+  max-width: calc(100vw - 24px);
+  max-height: var(--radix-dropdown-menu-content-available-height);
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 8px 0;
+  border: 0;
+  border-radius: 20px;
+  background: #1f1f1f;
+  color: #e3e3e3;
+  box-shadow: 0 4px 12px rgb(0 0 0 / 20%);
+  font-family: 'Google Sans Flex', 'Google Sans', Arial, 'Noto Sans KR', sans-serif;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 20px;
+  outline: none;
+  transform-origin: var(--radix-dropdown-menu-content-transform-origin);
+}
+
+.prism-response-menu-item {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 40px;
+  width: 100%;
+  margin: 0;
+  padding: 10px 16px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  white-space: nowrap;
+  outline: none;
+  cursor: pointer;
+  user-select: none;
+}
+
+.prism-response-menu-item > svg {
+  flex: 0 0 18px;
+  width: 18px;
+  height: 18px;
+  stroke-width: 1.7;
+}
+
+.prism-response-menu-item[data-highlighted] {
+  background: #303030;
+}
+
+.prism-response-menu-item[data-active="true"] {
+  color: #a8c7fa;
+}
+
+.prism-response-menu-item[data-disabled] {
+  opacity: .42;
+  cursor: default;
+}
+
+.prism-response-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.prism-response-error {
+  margin: 4px 0 0;
+  color: #ffb4ab;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.prism-response-feedback {
+  box-sizing: border-box;
+  width: 100%;
+  margin: 14px 0 0;
+  padding: 16px 20px 20px;
+  border: 1px solid #3c4043;
+  border-radius: 20px;
+  background: #1f1f1f;
+  color: #e3e3e3;
+  font: inherit;
+}
+
+.prism-response-feedback-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 14px;
+}
+
+.prism-response-feedback-heading h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 24px;
+  outline: none;
+}
+
+.prism-response-feedback-heading > button { margin-right: -6px; }
+.prism-response-feedback fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
+
+.prism-response-feedback-reasons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.prism-response-feedback-chip {
+  max-width: 100%;
+  min-height: 32px;
+  padding: 6px 12px;
+  border: 1px solid #5f6368;
+  border-radius: 18px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  line-height: 18px;
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.prism-response-feedback-chip:hover { background: #303030; }
+.prism-response-feedback-chip[aria-pressed="true"] { border-color: #a8c7fa; background: #23344e; color: #d3e3fd; }
+
+.prism-response-feedback textarea {
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  min-height: 88px;
+  max-height: 260px;
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid #5f6368;
+  border-radius: 12px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 14px;
+  line-height: 21px;
+  resize: vertical;
+}
+
+.prism-response-feedback textarea::placeholder { color: #9aa0a6; }
+.prism-response-feedback-notice { margin: 10px 0 14px; color: #c4c7c5; font-size: 12px; line-height: 18px; }
+.prism-response-feedback-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.prism-response-feedback-count { color: #9aa0a6; font-size: 12px; }
+.prism-response-feedback-count[data-invalid="true"] { color: #ffb4ab; }
+
+.prism-response-feedback-submit {
+  min-height: 40px;
+  padding: 10px 24px;
+  border: 0;
+  border-radius: 22px;
+  background: #a8c7fa;
+  color: #062e6f;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.prism-response-feedback-chip:focus-visible,
+.prism-response-feedback textarea:focus-visible,
+.prism-response-feedback-submit:focus-visible { outline: 2px solid #a8c7fa; outline-offset: 3px; }
+.prism-response-feedback button:disabled,
+.prism-response-feedback textarea:disabled { opacity: .5; cursor: default; }
+
+html[data-theme="light"] .prism-response-feedback { background: #f0f4f9; color: #1f1f1f; border-color: #dadce0; }
+html[data-theme="light"] .prism-response-feedback-chip,
+html[data-theme="light"] .prism-response-feedback textarea { border-color: #9aa0a6; }
+html[data-theme="light"] .prism-response-feedback-chip:hover { background: #e2e7ed; }
+html[data-theme="light"] .prism-response-feedback-chip[aria-pressed="true"] { border-color: #0b57d0; background: #d3e3fd; color: #0842a0; }
+html[data-theme="light"] .prism-response-feedback-notice,
+html[data-theme="light"] .prism-response-feedback-count,
+html[data-theme="light"] .prism-response-feedback textarea::placeholder { color: #5f6368; }
+html[data-theme="light"] .prism-response-feedback-count[data-invalid="true"] { color: #b3261e; }
+html[data-theme="light"] .prism-response-feedback-submit { background: #0b57d0; color: #fff; }
+html[data-theme="light"] .prism-response-feedback-chip:focus-visible,
+html[data-theme="light"] .prism-response-feedback textarea:focus-visible,
+html[data-theme="light"] .prism-response-feedback-submit:focus-visible { outline-color: #0b57d0; }
+
+@media (max-width: 600px) {
+  .prism-response-feedback { padding: 14px 14px 16px; }
+}
+
+html[data-theme="light"] .prism-response-action {
+  color: #5f6368;
+}
+
+html[data-theme="light"] .prism-response-action:hover,
+html[data-theme="light"] .prism-response-action[data-state="open"] {
+  background: rgba(60, 64, 67, .08);
+  color: #1f1f1f;
+}
+
+html[data-theme="light"] .prism-response-action[aria-pressed="true"],
+html[data-theme="light"] .prism-response-action[data-copied="true"] {
+  color: #1f1f1f;
+}
+
+html[data-theme="light"] .prism-response-action:focus-visible {
+  outline-color: #0b57d0;
+}
+
+html[data-theme="light"] .prism-response-menu {
+  background: #f0f4f9;
+  color: #1f1f1f;
+  box-shadow: 0 4px 12px rgb(60 64 67 / 16%);
+}
+
+html[data-theme="light"] .prism-response-menu-item[data-highlighted] {
+  background: #e2e7ed;
+}
+
+html[data-theme="light"] .prism-response-menu-item[data-active="true"] {
+  color: #0b57d0;
+}
+
+html[data-theme="light"] .prism-response-error {
+  color: #b3261e;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .prism-response-action { transition: none; }
+}
+
+@media print {
+  .prism-response-actions,
+  .prism-response-menu,
+  .prism-response-tooltip { display: none !important; }
+}

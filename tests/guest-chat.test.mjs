@@ -1,13 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import ts from 'typescript';
 
 const runtime = new URL('../.sites-runtime/guest-tests/', import.meta.url);
 await mkdir(runtime, { recursive: true });
 await writeFile(new URL('context.mjs', runtime), 'export const env = {};');
-const modules = ['models', 'provider', 'billing', 'beta', 'guest-chat'];
+const modules = ['models', 'provider', 'billing-contract','billing', 'beta', 'regenerate-style', 'guest-chat', 'security-monitoring'];
 for (const name of modules) {
   let source = await readFile(new URL('../lib/' + name + '.ts', import.meta.url), 'utf8');
   for (const dependency of modules) source = source.replaceAll("'./" + dependency + "'", "'./" + dependency + ".mjs'");
@@ -17,14 +17,16 @@ for (const name of modules) {
   }).outputText);
 }
 const { handleGuest, GUEST_POLICY } = await import(new URL('guest-chat.mjs', runtime));
-const schema = (await Promise.all(['0000_shallow_tony_stark.sql', '0002_omniscient_sinister_six.sql'].map(name =>
+const schema = (await Promise.all((await readdir(new URL('../drizzle/', import.meta.url))).filter(name=>name.endsWith('.sql')).sort().map(name =>
   readFile(new URL('../drizzle/' + name, import.meta.url), 'utf8')))).join('\n');
 
 const events = response => response.text().then(text => text.split('\n').filter(line => line.startsWith('data: ')).map(line => JSON.parse(line.slice(6))));
 const successStream = (text = 'A real provider test response.') => new Response([
-  { type: 'response.output_text.delta', delta: text },
-  { type: 'response.completed', response: { usage: { input_tokens: 12, output_tokens: 8 } } },
-].map(event => 'data: ' + JSON.stringify(event) + '\n\n').join(''));
+  { event_type: 'interaction.start', interaction: { id: 'interaction-test', status: 'in_progress' } },
+  { event_type: 'step.start', step: { type: 'model_output', content: [] } },
+  { event_type: 'step.delta', delta: { type: 'text', text } },
+  { event_type: 'interaction.completed', interaction: { status: 'completed', usage: { total_input_tokens: 12, total_output_tokens: 8, total_thought_tokens: 3 } } },
+].map(event => 'data: ' + JSON.stringify(event) + '\n\n').join(''), { headers: { 'Content-Type': 'text/event-stream' } });
 
 function fixture() {
   const sqlite = new DatabaseSync(':memory:'); sqlite.exec(schema);
@@ -34,14 +36,21 @@ function fixture() {
       bind(...args) { values = args; return this; },
       async first() { return sqlite.prepare(query).get(...values) ?? null; },
       async all() { return { results: sqlite.prepare(query).all(...values) }; },
-      async run() { return { success: true, meta: sqlite.prepare(query).run(...values) }; },
+      _run() { return { success: true, meta: sqlite.prepare(query).run(...values) }; },
+      async run() { return this._run(); },
     };
+  }, async batch(statements) {
+    sqlite.exec('BEGIN');
+    try { const results=statements.map(statement=>statement._run()); sqlite.exec('COMMIT'); return results; }
+    catch(error) { sqlite.exec('ROLLBACK'); throw error; }
   } };
-  const environment = { OPENAI_API_KEY: 'guest-test-only-key' };
+  const environment = { OPENAI_API_KEY: 'guest-signing-test-only-key', GEMINI_API_KEY: 'guest-gemini-test-only-key' };
   const originalFetch = globalThis.fetch, calls = [];
   let provider = async () => successStream();
   globalThis.fetch = async (url, options) => {
-    assert.equal(url, 'https://api.openai.com/v1/responses');
+    assert.equal(url, 'https://generativelanguage.googleapis.com/v1beta/interactions');
+    assert.equal(options.headers['x-goog-api-key'], environment.GEMINI_API_KEY);
+    assert.equal(options.headers.Authorization, undefined);
     calls.push({ url, options, body: JSON.parse(options.body) });
     return provider(url, options);
   };
@@ -64,7 +73,7 @@ function fixture() {
   };
   const send = (cookie, body = {}, options = {}) => call('guest/chat', 'POST', { requestId: crypto.randomUUID(), prompt: 'Explain this clearly.', ...body }, { cookie, ...options });
   const seed = (overrides = {}) => sqlite.prepare('INSERT INTO usage (id,user_id,model,provider,status,created_at,rate_snapshot,reserved_amount) VALUES (?,?,?,?,?,?,?,?)').run(
-    overrides.id ?? crypto.randomUUID(), overrides.owner ?? 'guest:fixture', GUEST_POLICY.model, 'openai', overrides.status ?? 'complete',
+    overrides.id ?? crypto.randomUUID(), overrides.owner ?? 'guest:fixture', overrides.model ?? GUEST_POLICY.model, overrides.provider ?? 'google', overrides.status ?? 'complete',
     overrides.createdAt ?? Date.now(), overrides.snapshot ?? 'beta:guest:v1:fixture', overrides.amount ?? 1,
   );
   return { sqlite, sql, environment, calls, request, call, bootstrap, send, seed,
@@ -78,13 +87,13 @@ test('bootstrap issues a signed private cookie and returns configured capabiliti
   try {
     const { response, data, cookie } = await f.bootstrap({ origin: null });
     assert.equal(response.status, 200); assert.equal(data.available, true); assert.equal(data.remaining, 5);
-    assert.equal(data.model.id, 'gpt-6.1-sol'); assert.equal(data.maxPromptBytes, 4000);
+    assert.deepEqual(data.model, { id: 'gemini-3.5-flash-lite', name: 'Gemini 3.5 Flash-Lite', provider: 'google' }); assert.equal(data.maxPromptBytes, 4000);
     assert.match(response.headers.get('cache-control'), /no-store/);
     assert.match(response.headers.get('set-cookie'), /^__Host-prism-guest=.*; Path=\/; Max-Age=604800; HttpOnly; Secure; SameSite=Lax$/);
     assert.equal((await f.bootstrap({ cookie })).response.headers.get('set-cookie'), null);
     assert.equal(f.sqlite.prepare('SELECT COUNT(*) n FROM usage').get().n, 0);
     assert.equal(f.calls.length, 0);
-    assert.doesNotMatch(JSON.stringify(data), /guest-test-only-key|203\.0\.113|beta:guest|guest:/);
+    assert.doesNotMatch(JSON.stringify(data), /guest-(?:gemini|signing)-test-only-key|203\.0\.113|beta:guest|guest:/);
     assert.equal(await f.call('conversations'), null);
     assert.equal((await f.call('guest/unknown')).status, 404);
   } finally { f.close(); }
@@ -93,14 +102,37 @@ test('bootstrap issues a signed private cookie and returns configured capabiliti
 test('missing credentials, disabled guest service, or unavailable database fail closed without inference', async () => {
   const f = fixture();
   try {
-    delete f.environment.OPENAI_API_KEY;
+    const { cookie } = await f.bootstrap();
+    // The legacy signing key cannot act as an inference fallback.
+    delete f.environment.GEMINI_API_KEY;
     assert.equal((await f.bootstrap()).response.status, 503);
-    f.environment.OPENAI_API_KEY = 'guest-test-only-key'; f.environment.GUEST_CHAT_ENABLED = 'false';
+    assert.equal((await f.send(cookie)).status, 503);
+    f.environment.GEMINI_API_KEY = 'guest-gemini-test-only-key'; f.environment.GUEST_CHAT_ENABLED = 'false';
     assert.equal((await f.bootstrap()).data.available, false);
     delete f.environment.GUEST_CHAT_ENABLED;
     const response = await handleGuest(f.request('guest/bootstrap'), ['guest', 'bootstrap'], undefined, f.environment);
     assert.equal(response.status, 503);
     assert.equal(f.calls.length, 0);
+  } finally { f.close(); }
+});
+
+test('Gemini-only installations work and an existing signing key preserves sessions across Gemini credential rotation', async () => {
+  const f = fixture();
+  try {
+    const { cookie } = await f.bootstrap();
+    await events(await f.send(cookie));
+    const original = f.sqlite.prepare('SELECT user_id,rate_snapshot FROM usage').get();
+    f.environment.GEMINI_API_KEY = 'rotated-gemini-test-only-key';
+    const reload = await f.bootstrap({ cookie });
+    assert.equal(reload.response.headers.get('set-cookie'), null);
+    assert.equal(reload.data.remaining, 4);
+    assert.equal((await events(await f.send(cookie))).at(-1).type, 'done');
+    assert.equal(f.sqlite.prepare('SELECT COUNT(*) n FROM usage WHERE user_id=? AND rate_snapshot=?').get(original.user_id, original.rate_snapshot).n, 2);
+    delete f.environment.OPENAI_API_KEY;
+    const geminiOnly = await f.bootstrap();
+    assert.equal(geminiOnly.data.available, true);
+    assert.equal((await events(await f.send(geminiOnly.cookie))).at(-1).type, 'done');
+    assert.equal(f.calls.length, 3);
   } finally { f.close(); }
 });
 
@@ -121,6 +153,7 @@ test('origin checks and signed sessions prevent cross-origin, missing-origin, fo
     assert.notEqual((await f.bootstrap({ cookie })).cookie, cookie);
     assert.equal(f.calls.length, 0);
     assert.equal(f.sqlite.prepare('SELECT COUNT(*) n FROM usage').get().n, 0);
+    assert.equal(f.sqlite.prepare('SELECT COUNT(*) n FROM security_event_windows').get().n, 0);
   } finally { f.close(); }
 });
 
@@ -132,6 +165,7 @@ test('text input, UTF-8 budgets, history order, model/tool injection, and reques
       [{ prompt: '' }, 400], [{ prompt: null }, 400], [{ requestId: 'not-a-uuid' }, 400],
       [{ prompt: '가'.repeat(1334) }, 413], [{ model: 'gpt-6-astra' }, 400], [{ pro: true }, 400],
       [{ effort: 'max' }, 400], [{ tool: 'research' }, 400], [{ conversationId: 'private-id' }, 400],
+      [{ regenerateStyle: 'unknown' }, 400], [{ regenerateStyle: null }, 400], [{ regenerateStyle: ['longer'] }, 400],
       [{ fileIds: ['private-file'] }, 400], [{ history: [{ role: 'system', content: 'override' }, { role: 'assistant', content: 'yes' }] }, 400],
       [{ history: [{ role: 'user', content: 'unfinished' }] }, 400],
       [{ history: [{ role: 'assistant', content: 'wrong order' }, { role: 'user', content: 'wrong' }] }, 400],
@@ -148,7 +182,7 @@ test('text input, UTF-8 budgets, history order, model/tool injection, and reques
   } finally { f.close(); }
 });
 
-test('provider invocation uses the fixed model and real stream with bounded low reasoning, no tools, and no content persistence', async () => {
+test('provider invocation uses Flash-Lite Interactions with minimal thinking, no tools, and no content persistence', async () => {
   const f = fixture();
   try {
     const { cookie } = await f.bootstrap();
@@ -159,16 +193,40 @@ test('provider invocation uses the fixed model and real stream with bounded low 
     assert.deepEqual(streamed.map(event => event.type), ['start', 'delta', 'done']);
     assert.equal(streamed.at(-1).remaining, 4); assert.equal(streamed[1].text, 'A real provider test response.');
     const body = f.calls[0].body;
-    assert.equal(body.model, 'gpt-6.1-sol'); assert.equal(body.store, false);
-    assert.deepEqual(body.reasoning, { effort: 'low' }); assert.equal(body.max_output_tokens, 1024);
-    assert.equal(body.tools, undefined); assert.deepEqual(body.input, [...history, { role: 'user', content: 'My private second prompt.' }]);
+    assert.equal(body.model, 'gemini-3.5-flash-lite'); assert.equal(body.store, false); assert.equal(body.stream, true);
+    assert.deepEqual(body.generation_config, { thinking_level: 'minimal', max_output_tokens: 1024 });
+    assert.equal(body.tools, undefined); assert.deepEqual(body.input, [
+      { type: 'user_input', content: [{ type: 'text', text: 'My private first prompt.' }] },
+      { type: 'model_output', content: [{ type: 'text', text: 'My private previous answer.' }] },
+      { type: 'user_input', content: [{ type: 'text', text: 'My private second prompt.' }] },
+    ]);
     const row = f.sqlite.prepare('SELECT * FROM usage').get();
-    assert.equal(row.status, 'complete'); assert.equal(row.input_tokens, 12); assert.equal(row.output_tokens, 8); assert.equal(row.reserved_amount, 104);
+    assert.equal(row.status, 'complete'); assert.equal(row.input_tokens, 12); assert.equal(row.output_tokens, 11);
+    // ceil(12 * 0.30 + (8 answer + 3 thinking) * 2.50) micro-USD.
+    assert.equal(row.reserved_amount, 32); assert.equal(row.model, 'gemini-3.5-flash-lite'); assert.equal(row.provider, 'google');
     assert.match(row.user_id, /^guest:[a-f0-9]{64}$/); assert.match(row.rate_snapshot, /^beta:guest:v1:[a-f0-9]{64}$/);
-    assert.doesNotMatch(JSON.stringify(row), /private|203\.0\.113|guest-test-only-key|real provider/);
+    assert.doesNotMatch(JSON.stringify(row), /private|203\.0\.113|guest-(?:gemini|signing)-test-only-key|real provider/);
     assert.equal(f.sqlite.prepare('SELECT COUNT(*) n FROM conversations').get().n, 0);
     assert.equal(f.sqlite.prepare('SELECT COUNT(*) n FROM messages').get().n, 0);
     assert.equal(f.sqlite.prepare('SELECT COUNT(*) n FROM files').get().n, 0);
+  } finally { f.close(); }
+});
+
+test('a completed Google JSON interaction records real answer and thinking usage at the Flash-Lite rate', async () => {
+  const f = fixture();
+  try {
+    const { cookie } = await f.bootstrap();
+    f.setProvider(async () => Response.json({
+      id: 'interaction-json-test', status: 'completed',
+      steps: [{ type: 'model_output', content: [{ type: 'text', text: 'Google JSON answer.' }] }],
+      usage: { total_input_tokens: 20, total_output_tokens: 10, total_thought_tokens: 4 },
+    }));
+    const streamed = await events(await f.send(cookie));
+    assert.deepEqual(streamed.map(event => event.type), ['start', 'delta', 'done']);
+    assert.equal(streamed[1].text, 'Google JSON answer.');
+    const row = f.sqlite.prepare('SELECT * FROM usage').get();
+    assert.equal(row.input_tokens, 20); assert.equal(row.output_tokens, 14);
+    assert.equal(row.reserved_amount, 41); assert.equal(row.status, 'complete');
   } finally { f.close(); }
 });
 
@@ -178,7 +236,7 @@ test('idempotency survives network retries and does not permit a second provider
     const { cookie } = await f.bootstrap();
     const requestId = crypto.randomUUID();
     await events(await f.send(cookie, { requestId }));
-    const duplicate = await f.send(cookie, { requestId: requestId.toUpperCase(), prompt: 'Changed prompt on the same ID.' });
+    const duplicate = await f.send(cookie, { requestId: requestId.toUpperCase(), prompt: 'Changed prompt on the same ID.', regenerateStyle: 'shorter' });
     assert.equal(duplicate.status, 409); assert.equal((await duplicate.json()).code, 'DUPLICATE_REQUEST');
     assert.equal(f.calls.length, 1);
     // A different signed session owns its own ID namespace; one user cannot
@@ -186,6 +244,36 @@ test('idempotency survives network retries and does not permit a second provider
     const other = await f.bootstrap();
     await events(await f.send(other.cookie, { requestId }));
     assert.equal(f.calls.length, 2);
+  } finally { f.close(); }
+});
+
+test('guest regeneration styles change only provider instructions and preserve actual usage accounting', async () => {
+  const f = fixture();
+  try {
+    const { cookie } = await f.bootstrap(), reserved = [];
+    f.setProvider(async () => { reserved.push(f.sqlite.prepare("SELECT reserved_amount FROM usage WHERE status='pending'").get().reserved_amount); return successStream(); });
+    const history = [{ role: 'user', content: 'Earlier question.' }, { role: 'assistant', content: 'Earlier answer.' }];
+    const styles = ['longer', 'shorter', 'no_personalization', 'retry'];
+    for (const style of styles) {
+      const streamed = await events(await f.send(cookie, { prompt: 'Explain the current question.', history, regenerateStyle: style }));
+      assert.equal(streamed.at(-1).type, 'done');
+      const body = f.calls.at(-1).body;
+      assert.deepEqual(body.input.slice(0, -1), [
+        { type: 'user_input', content: [{ type: 'text', text: 'Earlier question.' }] },
+        { type: 'model_output', content: [{ type: 'text', text: 'Earlier answer.' }] },
+      ]);
+      const prompt = body.input.at(-1).content[0].text;
+      if (style === 'longer' || style === 'shorter') {
+        assert.ok(prompt.startsWith('Explain the current question.\n\n'));
+        assert.match(prompt, new RegExp(style === 'longer' ? 'longer, more detailed' : 'shorter, more concise'));
+      } else assert.equal(prompt, 'Explain the current question.');
+      assert.equal(body.model, 'gemini-3.5-flash-lite'); assert.equal(body.generation_config.max_output_tokens, 1024); assert.equal(body.tools, undefined);
+    }
+    assert.ok(reserved[0] > reserved[3]); assert.ok(reserved[1] > reserved[3]); assert.equal(reserved[2], reserved[3]);
+    assert.equal(f.calls.length, 4);
+    const rows = f.sqlite.prepare('SELECT status,input_tokens,output_tokens,reserved_amount FROM usage').all();
+    assert.equal(rows.length, 4); assert.ok(rows.every(row => row.status === 'complete' && row.input_tokens === 12 && row.output_tokens === 11 && row.reserved_amount === 32));
+    assert.equal(f.sqlite.prepare('SELECT COUNT(*) n FROM messages').get().n, 0);
   } finally { f.close(); }
 });
 
@@ -204,6 +292,8 @@ test('five daily attempts persist across reload and provider errors retain reser
     assert.equal((await exhausted.json()).code, 'GUEST_LIMIT_REACHED');
     assert.ok(Number(exhausted.headers.get('retry-after')) > 0);
     assert.equal(f.calls.length, 5);
+    assert.equal(f.sqlite.prepare("SELECT SUM(event_count) n FROM security_event_windows WHERE category='resource_spike'").get().n,5);
+    assert.equal(f.sqlite.prepare("SELECT SUM(event_count) n FROM security_event_windows WHERE category='server_error'").get().n,5);
     const rows = f.sqlite.prepare('SELECT status,reserved_amount,error FROM usage').all();
     assert.ok(rows.every(row => row.status === 'error' && row.reserved_amount > 0 && row.error === 'GUEST_PROVIDER_ERROR'));
   } finally { f.close(); }
@@ -244,8 +334,9 @@ test('guest daily budget and request caps and the existing shared beta lifetime 
     const f = fixture();
     try {
       const { cookie } = await f.bootstrap();
-      if (mode === 'daily-budget') f.seed({ amount: GUEST_POLICY.siteDailyBudgetMicros });
-      if (mode === 'daily-count') for (let i = 0; i < GUEST_POLICY.siteDailyRequests; i++) f.seed({ owner: 'guest:count-' + i });
+      // Records created before the Gemini switch still consume the same caps.
+      if (mode === 'daily-budget') f.seed({ model: 'gpt-6.1-sol', provider: 'openai', amount: GUEST_POLICY.siteDailyBudgetMicros });
+      if (mode === 'daily-count') for (let i = 0; i < GUEST_POLICY.siteDailyRequests; i++) f.seed({ model: 'gpt-6.1-sol', provider: 'openai', owner: 'guest:count-' + i });
       if (mode === 'beta-lifetime') f.seed({ owner: 'signed-in-user', snapshot: 'beta:v1', amount: GUEST_POLICY.betaLifetimeBudgetMicros, createdAt: Date.now() - 86_400_000 });
       const response = await f.send(cookie);
       assert.equal(response.status, mode === 'beta-lifetime' ? 503 : 429, mode);
@@ -324,9 +415,34 @@ test('request cancellation aborts the upstream fetch and retains a durable reser
     const streamed = await events(response);
     assert.equal(providerSignal.aborted, true);
     assert.equal(streamed.at(-1).code, 'GUEST_ABORTED');
+    assert.equal(f.sqlite.prepare("SELECT COUNT(*) n FROM security_event_windows WHERE category='server_error'").get().n,0);
     const row = f.sqlite.prepare('SELECT * FROM usage').get();
     assert.equal(row.status, 'error'); assert.ok(row.reserved_amount > 0);
   } finally { f.close(); }
+});
+
+test('guest SSE slow completion is visible after HTTP success and the counter follows reservation', async () => {
+  const f=fixture(), realNow=Date.now;
+  let now=Date.parse('2026-11-10T00:00:00Z'), release;
+  Date.now=()=>now;
+  try {
+    const {cookie}=await f.bootstrap();
+    f.setProvider(async()=>{
+      const row=f.sqlite.prepare('SELECT status,reserved_amount FROM usage').get();
+      assert.equal(row.status,'pending'); assert.ok(row.reserved_amount>0);
+      await new Promise(resolve=>{release=resolve;});
+      return successStream();
+    });
+    const response=await f.send(cookie);
+    assert.equal(response.status,200);
+    assert.equal(f.sqlite.prepare("SELECT COUNT(*) n FROM security_event_windows WHERE category='slow_request'").get().n,0);
+    now+=120000; release();
+    assert.equal((await events(response)).at(-1).type,'done');
+    assert.equal(f.sqlite.prepare("SELECT event_count FROM security_event_windows WHERE category='slow_request'").get().event_count,1);
+    const attempt=f.sqlite.prepare("SELECT * FROM security_event_windows WHERE category='resource_spike'").get();
+    assert.equal(attempt.route,'/api/generation'); assert.equal(attempt.event_count,1);
+    assert.doesNotMatch(JSON.stringify(f.sqlite.prepare('SELECT * FROM security_event_windows').all()),/guest:[a-f\d]{64}|beta:|203\.0\.113|Explain this/);
+  } finally { release?.(); Date.now=realNow; f.close(); }
 });
 
 test('cancelling the response stream also stops upstream work and truncated streams never report success', async () => {
@@ -341,7 +457,7 @@ test('cancelling the response stream also stops upstream work and truncated stre
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(providerSignal.aborted, true);
     assert.equal(f.sqlite.prepare('SELECT status FROM usage').get().status, 'error');
-    f.setProvider(async () => new Response('data: {"type":"response.output_text.delta","delta":"Partial answer"}\n\n'));
+    f.setProvider(async () => new Response('data: {"event_type":"step.delta","delta":{"type":"text","text":"Partial answer"}}\n\n'));
     const partial = await events(await f.send(cookie));
     assert.deepEqual(partial.map(event => event.type), ['start', 'delta', 'error']);
     assert.equal(partial.at(-1).code, 'GUEST_PROVIDER_ERROR');

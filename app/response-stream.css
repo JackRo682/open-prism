@@ -1,0 +1,51 @@
+/* Only newly arriving answer blocks enter. Previously displayed text stays still. */
+@keyframes prism-turn-enter {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Client render keys survive the saved server IDs, so a finished response
+   never replays this entry motion or remounts its selection/actions. */
+.gemini-shell .prism-thread .message[data-arriving="true"] {
+  animation: prism-turn-enter 240ms cubic-bezier(.2, 0, 0, 1) both;
+}
+.gemini-shell .prism-thread .message.assistant[data-arriving="true"] {
+  animation-duration: 200ms;
+}
+
+@keyframes prism-answer-enter {
+  from { opacity: .35; transform: translateY(2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes prism-answer-pulse {
+  0%, 100% { opacity: .5; }
+  50% { opacity: 1; }
+}
+
+:is(.gemini-shell .message.assistant, .prism-guest .pg-assistant)[data-streaming="true"] .pg-markdown > :is(p, h1, h2, h3, h4, h5, h6, ul, ol, blockquote) {
+  animation: prism-answer-enter 160ms ease-out both;
+}
+
+.gemini-shell .prism-thread .message.assistant[data-streaming="true"] > svg,
+.prism-guest .pg-assistant[data-streaming="true"] .pg-answer-mark > svg {
+  animation: prism-answer-pulse 1.5s ease-in-out infinite;
+}
+
+/* Contain tables/code inside the reading column in every response mode. */
+.gemini-shell :is(.response-text, .comparison-answer) {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.gemini-shell .response-text { white-space: normal; }
+.gemini-shell .response-text .pg-markdown p { white-space: pre-wrap; }
+
+@media (prefers-reduced-motion: reduce) {
+  .gemini-shell .prism-thread .message[data-arriving="true"],
+  :is(.gemini-shell .message.assistant, .prism-guest .pg-assistant)[data-streaming="true"] .pg-markdown > *,
+  .gemini-shell .prism-thread .message.assistant[data-streaming="true"] > svg,
+  .prism-guest .pg-assistant[data-streaming="true"] .pg-answer-mark > svg {
+    animation: none;
+  }
+}

@@ -1,5 +1,7 @@
 'use client';
 
+import './integrations.css';
+
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { AlertCircle, ArrowRight, FileText, Globe2, History, Image, LoaderCircle, Square } from 'lucide-react';
 import type { BrowserCapture } from '../../lib/browser-workspace';

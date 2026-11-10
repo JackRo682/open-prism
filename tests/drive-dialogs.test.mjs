@@ -22,17 +22,17 @@ export const findModel=()=>null, PROVIDERS={}, gmailComposeUrl=()=>'';
 for (const [target, path] of [
   ['drive-client', '../lib/drive-client.ts'],
   ['drive-picker', '../components/workspace/drive-picker.tsx'],
+  ['conversation-tools', '../components/workspace/conversation-tools.tsx'],
 ]) {
   const source = (await readFile(new URL(path, import.meta.url), 'utf8')).replace("import './integrations.css';", '')
     .replace(/\bfetch\((['"])\/api\//g, 'globalThis.__driveDialogHarness.apiFetch($1/api/');
   let code = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX } }).outputText;
   code = code.replace(/(['"])(react\/jsx-runtime|react|radix-ui|lucide-react|\.\.\/\.\.\/lib\/(?:client-api|models|conversation-export))\1/g, "'./fixture.mjs'")
     .replace("'../../lib/drive-client'", "'./drive-client.mjs'");
-  // Main uses direct fetch for the configuration route; keep that network boundary in the fixture.
-  if (target === 'drive-picker') code = "import { prismApiFetch } from './fixture.mjs';\n" + code.replace("fetch('/api/integrations/drive'", "prismApiFetch('/api/integrations/drive'");
   await writeFile(new URL(target + '.mjs', runtime), code);
 }
 const { DrivePickerDialog } = await import(new URL('drive-picker.mjs', runtime));
+const { ExportDialog } = await import(new URL('conversation-tools.mjs', runtime));
 const tokenValue = 'ya29.only-for-this-component-fixture';
 const scope = 'https://www.googleapis.com/auth/drive.file';
 const grant = () => ({ access_token: tokenValue, scope, expires_in: 3600, token_type: 'Bearer' });
@@ -152,4 +152,33 @@ test('pagehide discards an open picker grant before history can retain the page'
   const f = setup(t); await f.harness.flush(); f.connect(); f.auth[0].callback(grant());
   f.browser.dispatchEvent(new Event('pagehide')); assert.equal(f.pickers[0].disposed, true);
   await f.harness.flush(); f.connect(); assert.equal(f.auth.length, 2);
+});
+
+test('Docs export cannot be duplicated by stale or duplicate OAuth callbacks', async t => {
+  const target = { title: 'Example', content: 'Document contents', kind: 'docs' };
+  const f = setup(t, ExportDialog, { target, onClose() {} }); let calls = 0, finishRequest;
+  t.mock.method(globalThis, 'fetch', async (url, init) => {
+    calls++; assert.equal(new URL(url).hostname, 'www.googleapis.com'); assert.equal(init.redirect, 'error');
+    assert.ok(!init.body.includes(tokenValue));
+    return new Promise(resolve => { finishRequest = () => resolve(Response.json({ id: 'new_file' })); });
+  });
+  await f.harness.flush(); const click = f.connect(); click(); assert.equal(f.auth.length, 1);
+  const first = grant(), duplicate = grant();
+  const exporting = f.auth[0].callback(first); await f.auth[0].callback(duplicate);
+  assert.equal(first.access_token, undefined); assert.equal(duplicate.access_token, undefined); assert.equal(calls, 1);
+  finishRequest(); await exporting; await f.harness.flush();
+  assert.ok(f.text().includes('새 문서가 생성되었습니다.'));
+});
+
+test('Docs export aborts on unmount and ignores authorization from a replaced target', async t => {
+  const target = { title: 'Example', content: 'Document contents', kind: 'docs' };
+  const f = setup(t, ExportDialog, { target, onClose() {} }); await f.harness.flush(); f.connect();
+  f.harness.render({ target: { ...target, title: 'New target' } }); await f.harness.flush(); f.connect();
+  const stale = grant(); await f.auth[0].callback(stale); assert.equal(stale.access_token, undefined);
+  let transferSignal;
+  const fetch = t.mock.method(globalThis, 'fetch', (_url, init) => new Promise((_resolve, reject) => {
+    transferSignal = init.signal; init.signal.addEventListener('abort', () => reject(init.signal.reason), { once: true });
+  }));
+  const operation = f.auth[1].callback(grant()); assert.equal(fetch.mock.callCount(), 1);
+  f.harness.unmount(); assert.equal(transferSignal.aborted, true); await operation;
 });

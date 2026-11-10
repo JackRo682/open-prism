@@ -1,0 +1,56 @@
+/* Shared conversation controls match the reading column in the reference. */
+.gemini-shell .gemini-topbar[data-conversation='true'] { min-height: 60px; }
+.gemini-shell .gemini-topbar[data-conversation='true'] .gemini-top-actions { margin-left: auto; }
+/* Keep the measured 52px prompt action gutter; use a tighter 32px rhythm
+   between a completed response's action row and the following prompt. */
+.gemini-shell .prism-thread .message.assistant { margin-bottom: 32px; }
+.gemini-shell .prism-thread .message.user { margin-bottom: 52px; }
+.gemini-shell .prism-thread .message-body { width: 100%; min-width: 0; }
+.gemini-shell .prism-thread .message.user .avatar { display: none; }
+.gemini-shell .prism-thread .message.assistant .prism-response-actions { margin-top: 10px; }
+.gemini-shell .prism-user-actions { position: absolute; top: calc(100% + 5px); right: 5px; display: flex; gap: 3px; opacity: 0; pointer-events: none; transition: opacity .12s ease; }
+.gemini-shell .message.user:focus-within .prism-user-actions, .gemini-shell .prism-user-actions:has([data-copied='true']) { opacity: 1; pointer-events: auto; }
+.gemini-shell .prism-prompt-focus:focus { outline: none; }
+.gemini-shell .prism-prompt-focus:focus-visible { outline: 2px solid var(--prism-accent); outline-offset: 4px; border-radius: 4px; }
+.gemini-shell .prism-thread .message.user .prism-user-actions .message-copy,
+.gemini-shell .prism-user-edit { position: static; display: inline-grid; place-items: center; width: 32px; height: 32px; margin: 0; padding: 0; border: 0; border-radius: 50%; color: var(--prism-muted); background: transparent; }
+.gemini-shell .prism-user-actions button:hover { background: var(--prism-hover); color: var(--prism-ink); }
+.gemini-shell .prism-user-actions button:disabled { opacity: .4; }
+.gemini-shell .prism-thread .message.user.is-editing { width: 100%; max-width: 100%; padding: 20px; border-radius: 20px; }
+.prism-prompt-editor textarea { width: 100%; min-height: 96px; resize: vertical; background: transparent; border: 0; color: var(--prism-ink); font: inherit; font-size: 17px; line-height: 1.6; outline-offset: 4px; }
+.prism-prompt-editor-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+.prism-prompt-editor-actions button { padding: 9px 20px; border-radius: 24px; background: var(--prism-hover); }
+.prism-prompt-editor-actions button[type='submit'] { background: var(--prism-accent); color: var(--prism-page); }
+.prism-prompt-editor-note { color: var(--prism-muted); font-size: 12px; margin-top: 8px; }
+.gemini-shell .prism-recent-link > .prism-pin-indicator { flex: 0 0 14px; margin-left: auto; color: var(--prism-muted); }
+.gemini-shell .prism-recent-link { gap: 8px; }
+.prism-export-dialog, .prism-report-dialog { width: min(520px, calc(100vw - 32px)); }
+.prism-export-dialog label, .prism-report-dialog label { display: flex; flex-direction: column; gap: 8px; margin: 18px 0; font-size: 14px; }
+.prism-export-dialog textarea, .prism-report-dialog textarea, .prism-report-dialog select { width: 100%; min-width: 0; border: 1px solid var(--prism-border); border-radius: 12px; padding: 12px; background: var(--prism-page); color: var(--prism-ink); font: inherit; line-height: 1.5; resize: vertical; }
+.prism-export-note { margin-top: 14px; color: var(--prism-muted); font-size: 14px; line-height: 1.7; }
+.prism-tool-progress, .prism-export-success { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
+.prism-export-success { flex-wrap: wrap; }
+.prism-export-success a { display: inline-flex; align-items: center; gap: 6px; color: var(--prism-accent); }
+.prism-export-dialog .prism-dialog-actions { flex-wrap: wrap; }
+.prism-report-receipt { font-size: 12px; overflow-wrap: anywhere; color: var(--prism-muted); }
+.prism-details-overlay { position: fixed; inset: 0; z-index: 110; background: rgb(0 0 0 / 20%); }
+.prism-response-details { position: fixed; z-index: 111; inset: 12px 12px 12px auto; width: min(340px, calc(100vw - 24px)); padding: 22px; border-radius: 20px; background: var(--prism-sidebar); color: var(--prism-ink); box-shadow: var(--prism-menu-shadow); overflow-y: auto; font-family: 'Google Sans Flex', 'Google Sans', Arial, 'Noto Sans KR', sans-serif; }
+.prism-response-details .prism-dialog-heading { margin-bottom: 24px; }
+.prism-response-details .prism-dialog-heading h2 { font-size: 18px; font-weight: 500; }
+.prism-details-model { display: flex; align-items: center; gap: 10px; font-size: 14px; }
+.prism-response-details dl { display: grid; grid-template-columns: 1fr auto; gap: 12px; margin-top: 24px; font-size: 13px; }
+.prism-response-details dt { color: var(--prism-muted); }
+.prism-response-details dd { margin: 0; text-align: right; }
+@media (hover: hover) and (pointer: fine) {
+  .gemini-shell .message.user:hover .prism-user-actions { opacity: 1; pointer-events: auto; }
+}
+@media (max-width: 767px) {
+  .gemini-shell .prism-thread .message.assistant { margin-bottom: 32px; }
+  .gemini-shell .prism-thread .message.user { margin-bottom: 48px; }
+  .gemini-shell .prism-user-actions { top: calc(100% + 2px); }
+  .gemini-shell .prism-thread .message.user .prism-user-actions .message-copy, .gemini-shell .prism-user-edit { width: 40px; height: 40px; }
+}
+@media print { .prism-response-actions, .prism-user-actions, .prism-response-details, .prism-details-overlay { display: none !important; } }
+
+.prism-recovery-banner { display:flex; align-items:center; gap:12px; margin:8px auto; padding:12px 16px; max-width:708px; border-radius:12px; background:var(--prism-surface); font-size:13px; }
+.prism-recovery-banner button { display:inline-flex; align-items:center; gap:6px; color:var(--prism-accent); white-space:nowrap; }

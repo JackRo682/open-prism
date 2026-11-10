@@ -116,6 +116,7 @@ async function readBounded(response: Response, limit: number): Promise<Uint8Arra
 }
 
 async function providerJson(response: Response): Promise<Record<string, any>> {
+  // Manual redirects reach this check as 3xx and are rejected before parsing.
   if (!response.ok) {
     // Provider bodies can contain echoed prompts or credentials; never forward them to clients or logs.
     await response.body?.cancel().catch(() => {});
@@ -151,7 +152,7 @@ export async function generateImage(env: WorkspaceEnvironment, input: MediaInput
   const body: Record<string, unknown> = { model, prompt: input.prompt.trim(), n: 1, size: '1024x1024', quality: 'low', output_format: 'png', ...(input.safetyIdentifier ? { safety_identifier: input.safetyIdentifier } : {}) };
   if (input.reference) body.images = [{ image_url: `data:${input.reference.mimeType};base64,${base64(input.reference.bytes)}` }];
   const response = await fetch(`https://api.openai.com/v1/images/${input.reference ? 'edits' : 'generations'}`, {
-    method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal, redirect: 'error',
+    method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal, redirect: 'manual',
   });
   const data = await providerJson(response);
   if (!Array.isArray(data.data) || data.data.length !== 1) throw new WorkspaceToolError('생성된 이미지를 찾을 수 없습니다.', 502, 'INVALID_MEDIA_OUTPUT');
@@ -190,7 +191,7 @@ export async function createVideo(env: WorkspaceEnvironment, input: MediaInput, 
   const key = providerKey(env, 'video'), model = mediaModel(env, 'video');
   await validateMediaInput(input);
   const data = await providerJson(await fetch('https://generativelanguage.googleapis.com/v1beta/interactions', {
-    method: 'POST', headers: googleHeaders(key), signal, redirect: 'error', body: JSON.stringify({
+    method: 'POST', headers: googleHeaders(key), signal, redirect: 'manual', body: JSON.stringify({
       model, input: googleInput(input), store: false, background: false, stream: false,
       response_format: { type: 'video', aspect_ratio: input.aspect ?? '16:9', resolution: '720p', delivery: 'uri' },
     }),
@@ -209,7 +210,7 @@ export async function createVideo(env: WorkspaceEnvironment, input: MediaInput, 
 export async function pollVideo(env: WorkspaceEnvironment, job: VideoJob, signal: AbortSignal): Promise<'processing' | 'completed'> {
   const key = providerKey(env, 'video'), name = googleFileName(job.fileName);
   if (job.provider !== 'google') throw new WorkspaceToolError('동영상 제공자가 올바르지 않습니다.', 400, 'INVALID_VIDEO_JOB');
-  const data = await providerJson(await fetch(`https://generativelanguage.googleapis.com/v1beta/${name}`, { headers: googleHeaders(key), signal, redirect: 'error' }));
+  const data = await providerJson(await fetch(`https://generativelanguage.googleapis.com/v1beta/${name}`, { headers: googleHeaders(key), signal, redirect: 'manual' }));
   const state = typeof data.state === 'string' ? data.state : data.state?.name;
   if (state === 'ACTIVE') return 'completed';
   if (state === 'PROCESSING' || state === 'STATE_UNSPECIFIED') return 'processing';
@@ -229,8 +230,10 @@ export async function downloadVideo(env: WorkspaceEnvironment, job: VideoJob, si
     const location = response.headers.get('location');
     await response.body?.cancel().catch(() => {});
     if (!location || redirect === 3) throw new WorkspaceToolError('동영상 다운로드가 올바르게 완료되지 않았습니다.', 502, 'VIDEO_DOWNLOAD_FAILED');
-    const next = new URL(location, url);
-    if (next.protocol !== 'https:' || next.username || next.password || next.hash
+    let next: URL;
+    try { next = new URL(location, url); }
+    catch { throw new WorkspaceToolError('동영상 다운로드 주소를 확인할 수 없습니다.', 502, 'INVALID_VIDEO_FILE'); }
+    if (next.protocol !== 'https:' || next.username || next.password || next.hash || next.port
       || !['generativelanguage.googleapis.com', 'storage.googleapis.com'].includes(next.hostname) && !next.hostname.endsWith('.googleusercontent.com')) throw new WorkspaceToolError('동영상 다운로드 주소를 확인할 수 없습니다.', 502, 'INVALID_VIDEO_FILE');
     if (next.hostname === 'generativelanguage.googleapis.com' && googleFileName(next.href) !== name) throw new WorkspaceToolError('동영상 파일이 일치하지 않습니다.', 502, 'INVALID_VIDEO_FILE');
     url = next;
@@ -245,7 +248,7 @@ export async function generateMusic(env: WorkspaceEnvironment, input: MediaInput
   const key = providerKey(env, 'music'), model = mediaModel(env, 'music');
   await validateMediaInput(input);
   const data = await providerJson(await fetch('https://generativelanguage.googleapis.com/v1beta/interactions', {
-    method: 'POST', headers: googleHeaders(key), signal, redirect: 'error',
+    method: 'POST', headers: googleHeaders(key), signal, redirect: 'manual',
     body: JSON.stringify({ model, input: googleInput(input), store: false, background: false, stream: false, response_format: { type: 'audio' } }),
   }));
   const content = googleContent(data), output = content.find(part => part.type === 'audio');

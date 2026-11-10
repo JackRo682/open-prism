@@ -1,10 +1,12 @@
-import { BETA_OUTPUT, betaCost } from './beta';
-import { findModel } from './models';
-import { invokeProvider, type Turn } from './provider';
+import { BETA_OUTPUT } from './beta';
+import { DEFAULT_MODEL_ID, findModel } from './models';
+import { invokeProvider, PROVIDER_INPUT_OVERHEAD_BYTES, type Turn } from './provider';
+import { isRegenerateStyle, withRegenerateStyle } from './regenerate-style';
+import { recordGenerationOutcome, trackProviderAttempt } from './security-monitoring';
 
 /** Guest inference shares the existing, durable beta ledger and lifetime budget. */
 export const GUEST_POLICY = Object.freeze({
-  model: 'gpt-6.1-sol',
+  model: DEFAULT_MODEL_ID,
   sessionDailyRequests: 5,
   networkDailyRequests: 20,
   siteDailyRequests: 100,
@@ -26,7 +28,7 @@ const encoder = new TextEncoder();
 const byteLength = (value: string) => encoder.encode(value).byteLength;
 const hex = (bytes: ArrayBuffer | Uint8Array) => Array.from(new Uint8Array(bytes), byte => byte.toString(16).padStart(2, '0')).join('');
 const dayStart = (now: number) => Math.floor(now / 86_400_000) * 86_400_000;
-type GuestEnvironment = Pick<Cloudflare.Env, 'OPENAI_API_KEY' | 'GUEST_CHAT_ENABLED'>;
+type GuestEnvironment = Pick<Cloudflare.Env, 'OPENAI_API_KEY' | 'GEMINI_API_KEY' | 'GUEST_CHAT_ENABLED'>;
 type Identity = { owner: string; snapshot: string; cookie?: string };
 type GuestInput = { requestId: string; turns: Turn[]; inputBound: number };
 type Allowance = { sessionCount: number; networkCount: number; siteCount: number; dailyReserved: number; betaReserved: number };
@@ -45,8 +47,13 @@ function json(data: unknown, status = 200, extras: HeadersInit = {}) {
 
 function publicModel() {
   const model = findModel(GUEST_POLICY.model);
-  return { id: GUEST_POLICY.model, name: model?.name || 'GPT-6.1 Sol', provider: 'openai' };
+  return { id: GUEST_POLICY.model, name: model?.name || 'Gemini 3.5 Flash-Lite', provider: 'google' };
 }
+
+// Flash-Lite standard pricing: $0.30 input / $2.50 output per million tokens.
+// Integer tenths of a micro-USD avoid floating-point over-rounding. The shared
+// guest snapshot prefix remains unchanged so existing limits cannot reset.
+const guestCost = (input: number, output: number) => Math.ceil((input * 3 + output * 25) / 10);
 
 function publicLimits(now: number) {
   return {
@@ -150,8 +157,11 @@ async function readInput(req: Request): Promise<GuestInput> {
   catch { throw new GuestError('INVALID_JSON', '요청 내용을 읽을 수 없습니다.'); }
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new GuestError('INVALID_INPUT', '올바른 메시지를 입력해주세요.');
   const body = raw as Record<string, unknown>;
-  if (Object.keys(body).some(key => !['requestId', 'prompt', 'history'].includes(key))) {
+  if (Object.keys(body).some(key => !['requestId', 'prompt', 'history', 'regenerateStyle'].includes(key))) {
     throw new GuestError('INVALID_INPUT', '로그인 전에는 기본 텍스트 채팅만 사용할 수 있습니다.');
+  }
+  if (body.regenerateStyle !== undefined && !isRegenerateStyle(body.regenerateStyle)) {
+    throw new GuestError('INVALID_INPUT', '응답 다시 생성 옵션을 확인해주세요.');
   }
   if (typeof body.requestId !== 'string' || !/^[a-f\d]{8}-[a-f\d]{4}-4[a-f\d]{3}-[89ab][a-f\d]{3}-[a-f\d]{12}$/i.test(body.requestId)) {
     throw new GuestError('INVALID_REQUEST_ID', '올바른 요청 ID가 필요합니다.');
@@ -175,7 +185,10 @@ async function readInput(req: Request): Promise<GuestInput> {
   turns.push({ role: 'user', content: prompt });
   const inputBytes = turns.reduce((total, turn) => total + byteLength(turn.content), 0);
   if (inputBytes > GUEST_POLICY.maxInputBytes) throw new GuestError('HISTORY_TOO_LARGE', '대화가 길어졌습니다. 새 채팅을 시작하거나 로그인해주세요.', 413);
-  return { requestId: body.requestId.toLowerCase(), turns, inputBound: inputBytes + 4096 };
+  const styledPrompt = withRegenerateStyle(prompt, body.regenerateStyle);
+  turns[turns.length - 1] = { role: 'user', content: styledPrompt };
+  // Preserve the visitor's text limits while reserving for every added byte.
+  return { requestId: body.requestId.toLowerCase(), turns, inputBound: inputBytes + byteLength(styledPrompt) - byteLength(prompt) + PROVIDER_INPUT_OVERHEAD_BYTES };
 }
 
 async function allowance(sql: D1Database, who: Identity, now: number): Promise<Allowance> {
@@ -195,10 +208,10 @@ const remaining = (state: Allowance) => Math.max(0, Math.min(
   GUEST_POLICY.networkDailyRequests - state.networkCount,
   GUEST_POLICY.siteDailyRequests - state.siteCount,
 ));
-function budgetAvailable(state: Allowance, amount = betaCost(4097, GUEST_POLICY.maxOutputTokens)) {
+function budgetAvailable(state: Allowance, amount = guestCost(PROVIDER_INPUT_OVERHEAD_BYTES + 1, GUEST_POLICY.maxOutputTokens)) {
   return state.dailyReserved + amount <= GUEST_POLICY.siteDailyBudgetMicros && state.betaReserved + amount <= GUEST_POLICY.betaLifetimeBudgetMicros;
 }
-function siteBudgetAvailable(state: Allowance, amount = betaCost(4097, GUEST_POLICY.maxOutputTokens)) {
+function siteBudgetAvailable(state: Allowance, amount = guestCost(PROVIDER_INPUT_OVERHEAD_BYTES + 1, GUEST_POLICY.maxOutputTokens)) {
   return state.betaReserved + amount <= GUEST_POLICY.betaLifetimeBudgetMicros;
 }
 
@@ -208,7 +221,7 @@ async function reserveGuest(sql: D1Database, who: Identity, ledgerId: string, am
   const day = dayStart(now), activeSince = now - GUEST_POLICY.timeoutMs - 15_000;
   return sql.prepare(`INSERT INTO usage
     (id,user_id,model,provider,status,created_at,rate_snapshot,reserved_amount)
-    SELECT ?,?,?,'openai','pending',?,?,?
+    SELECT ?,?,?,'google','pending',?,?,?
     WHERE (SELECT COUNT(*) FROM usage WHERE user_id=? AND created_at>=?) < ?
     AND (SELECT COUNT(*) FROM usage WHERE rate_snapshot=? AND created_at>=?) < ?
     AND (SELECT COUNT(*) FROM usage WHERE rate_snapshot LIKE 'beta:guest:v1:%' AND created_at>=?) < ?
@@ -233,11 +246,15 @@ export async function handleGuest(req: Request, path: string[], sql: D1Database 
     const bootstrap = path.length === 2 && path[1] === 'bootstrap' && req.method === 'GET';
     const chat = path.length === 2 && path[1] === 'chat' && req.method === 'POST';
     if (!bootstrap && !chat) return json({ error: 'Endpoint not found.', code: 'NOT_FOUND' }, 404);
-    const model = findModel(GUEST_POLICY.model), secret = environment.OPENAI_API_KEY;
-    if (!sql || !secret || !model || environment.GUEST_CHAT_ENABLED === 'false') {
+    const model = findModel(GUEST_POLICY.model), providerKey = environment.GEMINI_API_KEY;
+    // Preserve existing signed guest identities and quota buckets when the old
+    // server key exists; it is never used for guest inference. New installations
+    // need only the Gemini key. Missing Gemini access fails closed.
+    const signingSecret = environment.OPENAI_API_KEY || providerKey;
+    if (!sql || !providerKey || !signingSecret || !model || model.provider !== 'google' || environment.GUEST_CHAT_ENABLED === 'false') {
       return json({ ...publicLimits(now), available: false, remaining: 0, code: 'GUEST_UNAVAILABLE', error: '현재 체험 채팅을 이용할 수 없습니다. 잠시 후 다시 시도해주세요.' }, 503);
     }
-    const key = await signingKey(secret), who = await identity(req, key, now, bootstrap);
+    const key = await signingKey(signingSecret), who = await identity(req, key, now, bootstrap);
     if (bootstrap) {
       const state = await allowance(sql, who, now);
       const available = budgetAvailable(state), siteExhausted = !siteBudgetAvailable(state);
@@ -256,7 +273,7 @@ export async function handleGuest(req: Request, path: string[], sql: D1Database 
     const ledgerId = 'guest:' + await sign(key, 'request', who.owner + ':' + input.requestId);
     const duplicate = () => sql.prepare('SELECT id FROM usage WHERE id=? AND user_id=?').bind(ledgerId, who.owner).first();
     if (await duplicate()) throw new GuestError('DUPLICATE_REQUEST', '이미 접수된 요청입니다. 새 질문으로 다시 시도해주세요.', 409);
-    const amount = betaCost(input.inputBound, GUEST_POLICY.maxOutputTokens);
+    const amount = guestCost(input.inputBound, GUEST_POLICY.maxOutputTokens);
     if (!await reserveGuest(sql, who, ledgerId, amount, now)) {
       if (await duplicate()) throw new GuestError('DUPLICATE_REQUEST', '이미 접수된 요청입니다. 새 질문으로 다시 시도해주세요.', 409);
       const latest = await allowance(sql, who, now);
@@ -277,33 +294,36 @@ export async function handleGuest(req: Request, path: string[], sql: D1Database 
     // value is informational; every subsequent request rechecks the ledger.
     const left = Math.max(0, remaining(state) - 1);
     const aborter = new AbortController();
-    let closed = false, timedOut = false;
-    const onAbort = () => aborter.abort();
+    let closed = false, timedOut = false, userAborted = false;
+    const onAbort = () => { userAborted = true; aborter.abort(); };
     req.signal.addEventListener('abort', onAbort, { once: true });
-    if (req.signal.aborted) aborter.abort();
+    if (req.signal.aborted) onAbort();
     const timer = setTimeout(() => { timedOut = true; aborter.abort(); }, GUEST_POLICY.timeoutMs);
     const stream = new ReadableStream<Uint8Array>({
       async start(controller) {
         const emit = (value: unknown) => { if (!closed) controller.enqueue(encoder.encode('data: ' + JSON.stringify(value) + '\n\n')); };
-        let text = '';
+        const generationStartedAt = Date.now(), monitoringId = crypto.randomUUID();
+        let text = '', outcomeStatus = 200;
         try {
           emit({ type: 'start', requestId: input.requestId, model: model.id, remaining: left });
           if (aborter.signal.aborted) throw new DOMException('Request aborted.', 'AbortError');
-          const measured = await invokeProvider(model, secret, input.turns, 'low', false, aborter.signal, delta => {
+          const measured = await trackProviderAttempt(sql, monitoringId, () => invokeProvider(model, providerKey, input.turns, 'minimal', false, aborter.signal, delta => {
             if (aborter.signal.aborted) throw new DOMException('Request aborted.', 'AbortError');
             text += delta; emit({ type: 'delta', text: delta });
-          }, GUEST_POLICY.maxOutputTokens);
+          }, GUEST_POLICY.maxOutputTokens));
           if (aborter.signal.aborted) throw new DOMException('Request aborted.', 'AbortError');
           if (!text.trim()) throw new Error('The provider returned no text.');
-          const charged = betaCost(measured.input, measured.output);
+          const charged = guestCost(measured.input, measured.output);
           if (charged > amount) throw new Error('Provider usage exceeded the reservation.');
           await sql.prepare("UPDATE usage SET status='complete',input_tokens=?,output_tokens=?,reserved_amount=?,duration=? WHERE id=? AND user_id=?")
             .bind(measured.input, measured.output, charged, Math.max(0, Date.now() - now), ledgerId, who.owner).run();
           emit({ type: 'done', requestId: input.requestId, model: model.id, remaining: left, usage: { input: measured.input, output: measured.output } });
-        } catch {
+        } catch (failure) {
           // Failures and cancellations keep their reservation: they may already
           // have incurred provider usage. Never store prompts or response text.
           const code = aborter.signal.aborted ? timedOut ? 'GUEST_TIMEOUT' : 'GUEST_ABORTED' : 'GUEST_PROVIDER_ERROR';
+          outcomeStatus = userAborted ? 499 : timedOut || failure instanceof Error && failure.name === 'TimeoutError' ? 504
+            : failure instanceof GuestError ? failure.status : 500;
           try { await sql.prepare("UPDATE usage SET status='error',error=?,duration=? WHERE id=? AND user_id=?")
             .bind(code, Math.max(0, Date.now() - now), ledgerId, who.owner).run(); } catch { /* Pending reservation fails closed until its concurrency lease expires. */ }
           emit({ type: 'error', code, remaining: left, error: code === 'GUEST_ABORTED' ? '응답이 중지되었습니다. 접수된 요청은 체험 한도에 포함됩니다.'
@@ -311,10 +331,11 @@ export async function handleGuest(req: Request, path: string[], sql: D1Database 
             : 'AI 응답을 완료하지 못했습니다. 잠시 후 다시 시도해주세요. 접수된 요청은 체험 한도에 포함됩니다.' });
         } finally {
           clearTimeout(timer); req.signal.removeEventListener('abort', onAbort);
+          await recordGenerationOutcome(sql, { route: '/api/guest', requestId: monitoringId, status: outcomeStatus, startedAt: generationStartedAt });
           if (!closed) { closed = true; try { controller.close(); } catch { /* Client already disconnected. */ } }
         }
       },
-      cancel() { closed = true; aborter.abort(); },
+      cancel() { closed = true; onAbort(); },
     });
     return new Response(stream, { headers: { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'private, no-store, no-transform', 'X-Content-Type-Options': 'nosniff', 'Vary': 'Cookie' } });
   } catch (error) {

@@ -1,0 +1,112 @@
+/* Keep the desktop accuracy notice outside the scrolling conversation. */
+.app-shell.gemini-shell .prism-desktop-disclaimer { display: none; }
+
+@media (min-width: 768px) {
+  .app-shell.gemini-shell .main-content.gemini-main.view-chat { margin-bottom: 32px; }
+  .app-shell.gemini-shell .view-chat .gemini-welcome,
+  .app-shell.gemini-shell .view-chat .conversation-screen.prism-thread {
+    min-height: calc(100dvh - 92px);
+  }
+  .app-shell.gemini-shell .prism-thread .prism-thread-footer { display: none; }
+  .app-shell.gemini-shell .prism-desktop-disclaimer {
+    position: absolute;
+    z-index: 6;
+    inset: auto 16px 8px;
+    display: block;
+    margin: 0;
+    color: var(--prism-muted);
+    font-size: 12px;
+    line-height: 16px;
+    text-align: center;
+  }
+
+  /* The rail keeps its contents mounted while its width and labels ease. */
+  .app-shell.gemini-shell .sidebar.gemini-sidebar {
+    transition-duration: 260ms;
+  }
+  .app-shell.gemini-shell .main-shell.gemini-workspace,
+  .app-shell.gemini-shell .gemini-workspace::before { transition-duration: 260ms; }
+  .app-shell.gemini-shell .gemini-brand-row,
+  .app-shell.gemini-shell.sidebar-collapsed .gemini-brand-row {
+    position: relative;
+    justify-content: flex-start;
+    padding-inline: 14px 10px;
+  }
+  .app-shell.gemini-shell .sidebar-tools {
+    position: absolute;
+    right: 10px;
+    top: 8px;
+    transition: right 260ms cubic-bezier(.2, 0, 0, 1), gap 200ms ease;
+  }
+  .app-shell.gemini-shell.sidebar-collapsed .sidebar-tools { right: 20px; gap: 0; }
+  .app-shell.gemini-shell .sidebar-tools > button:first-child,
+  .app-shell.gemini-shell.sidebar-collapsed .sidebar-tools > button:first-child {
+    display: inline-flex;
+    overflow: hidden;
+    transition: width 200ms ease, flex-basis 200ms ease, padding 200ms ease, opacity 160ms ease, visibility 160ms;
+  }
+  .app-shell.gemini-shell.sidebar-collapsed .sidebar-tools > button:first-child {
+    width: 0;
+    flex-basis: 0;
+    padding: 0;
+    opacity: 0;
+    visibility: hidden;
+  }
+  .app-shell.gemini-shell .gemini-brand,
+  .app-shell.gemini-shell .gemini-notebooks,
+  .app-shell.gemini-shell .gemini-activity,
+  .app-shell.gemini-shell .gemini-recent {
+    opacity: 1;
+    visibility: visible;
+    transition: opacity 160ms ease, visibility 160ms;
+  }
+  .app-shell.gemini-shell.sidebar-collapsed .gemini-brand { display: inline-flex; }
+  .app-shell.gemini-shell.sidebar-collapsed .gemini-notebooks,
+  .app-shell.gemini-shell.sidebar-collapsed .gemini-recent { display: block; }
+  .app-shell.gemini-shell.sidebar-collapsed .gemini-activity { display: flex; }
+  .app-shell.gemini-shell.sidebar-collapsed .gemini-brand,
+  .app-shell.gemini-shell.sidebar-collapsed .gemini-notebooks,
+  .app-shell.gemini-shell.sidebar-collapsed .gemini-activity,
+  .app-shell.gemini-shell.sidebar-collapsed .gemini-recent {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+  }
+  /* Hidden sections must not reserve vertical space in the compact rail. */
+  .app-shell.gemini-shell.sidebar-collapsed :is(.gemini-notebooks, .gemini-activity, .gemini-recent) {
+    flex: 0 0 0;
+    min-height: 0;
+    max-height: 0;
+    margin-block: 0;
+    padding-block: 0;
+    overflow: hidden;
+  }
+  .app-shell.gemini-shell .gemini-navigation .gemini-nav-item {
+    justify-content: flex-start;
+    transition: padding 260ms cubic-bezier(.2, 0, 0, 1), gap 200ms ease, height 200ms ease, min-height 200ms ease, background 150ms ease;
+  }
+  .app-shell.gemini-shell.sidebar-collapsed .gemini-navigation .gemini-nav-item { padding-inline: 14px; gap: 0; }
+  .app-shell.gemini-shell .gemini-navigation .gemini-nav-item > span,
+  .app-shell.gemini-shell.sidebar-collapsed .gemini-navigation .gemini-nav-item > span {
+    display: block;
+    max-width: 220px;
+    opacity: 1;
+    transition: max-width 220ms cubic-bezier(.2, 0, 0, 1), opacity 160ms ease;
+  }
+  .app-shell.gemini-shell.sidebar-collapsed .gemini-navigation .gemini-nav-item > span { max-width: 0; opacity: 0; }
+}
+
+@media (min-width: 768px) and (max-height: 540px) {
+  .app-shell.gemini-shell .sidebar.gemini-sidebar { overflow-y: auto; }
+}
+
+@media (min-width: 768px) and (prefers-reduced-motion: reduce) {
+  .app-shell.gemini-shell .sidebar.gemini-sidebar,
+  .app-shell.gemini-shell .main-shell.gemini-workspace,
+  .app-shell.gemini-shell .gemini-workspace::before,
+  .app-shell.gemini-shell .gemini-sidebar * { transition-duration: .01ms !important; }
+}
+
+@media print {
+  .app-shell.gemini-shell .prism-desktop-disclaimer { display: none !important; }
+}

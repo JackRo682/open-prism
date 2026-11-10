@@ -4,13 +4,14 @@
 export const MAX_TEXT_FILE_BYTES = 128 * 1024;
 const MAX_IMAGE_BYTES = 16 * 1024 * 1024;
 const MAX_IMAGE_PARTS = 4096;
+const MAX_WEBP_PARTS = 256;
 const MAX_METADATA_BYTES = 256 * 1024;
 const unsafeName = /[\\/\x00-\x1f\x7f-\x9f:\u2028\u2029\u202a-\u202e\u2066-\u2069]/;
 const textExtension = /\.(txt|md|csv|json|ts|tsx|js|jsx|py|html|css|xml|yaml|yml|sql)$/i;
 
 export function safeDownloadName(value: unknown, fallback = 'download.bin'): string {
   const name = (typeof value === 'string' ? value.split(/[\\/]/).pop()! : '')
-    .replace(/[\x00-\x1f\x7f-\x9f:\u2028\u2029\u202a-\u202e\u2066-\u2069]/g, '').trim();
+    .normalize('NFC').replace(/[\x00-\x1f\x7f-\x9f:\u2028\u2029\u202a-\u202e\u2066-\u2069]/g, '').trim();
   // Preserve the extension while capping names, including legacy provider filenames.
   const extension = /\.[a-zA-Z0-9]{1,12}$/.exec(name)?.[0] ?? '';
   const shortened = name.length > 150 ? name.slice(0, 150 - extension.length) + extension : name;
@@ -24,11 +25,15 @@ export function attachmentDisposition(name: unknown): string {
     .replace(/['()*]/g, character => '%' + character.charCodeAt(0).toString(16).toUpperCase());
 }
 
-export const PRIVATE_FILE_HEADERS: Record<string, string> = {
+export const PRIVATE_FILE_HEADERS: Readonly<Record<string, string>> = Object.freeze({
   'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff',
   'Content-Security-Policy': "default-src 'none'; sandbox; base-uri 'none'; frame-ancestors 'none'",
   'Cross-Origin-Resource-Policy': 'same-origin', 'Referrer-Policy': 'no-referrer',
-};
+});
+
+export function validUploadName(name: string): boolean {
+  return !!name && name.length <= 200 && name.trim() === name && !unsafeName.test(name);
+}
 
 export function isOwnedObjectKey(value: unknown, owner: string, namespace?: 'media' | 'references' | 'artifacts'): value is string {
   if (typeof value !== 'string' || !owner || value.length > 1024 || /[\x00-\x1f\x7f]/.test(value)) return false;
@@ -38,8 +43,8 @@ export function isOwnedObjectKey(value: unknown, owner: string, namespace?: 'med
 }
 
 export function readTextUpload(bytes: Uint8Array, name: string): string | null {
-  if (!bytes.byteLength || bytes.byteLength > MAX_TEXT_FILE_BYTES || name.length > 200
-    || unsafeName.test(name) || !textExtension.test(name)) return null;
+  if (!bytes.byteLength || bytes.byteLength > MAX_TEXT_FILE_BYTES || !validUploadName(name)
+    || !textExtension.test(name)) return null;
   try {
     const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
     return /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(text) ? null : text;
@@ -47,14 +52,14 @@ export function readTextUpload(bytes: Uint8Array, name: string): string | null {
 }
 
 export function validReferenceName(name: string, mime: string): boolean {
-  if (!name || name.length > 200 || unsafeName.test(name)) return false;
+  if (!validUploadName(name)) return false;
   return mime === 'image/png' ? /\.png$/i.test(name)
     : mime === 'image/jpeg' ? /\.jpe?g$/i.test(name)
       : mime === 'image/webp' && /\.webp$/i.test(name);
 }
 
 type Dimensions = { width: number; height: number };
-type PngInfo = Dimensions & { depth: number; channels: number; interlaced: boolean; data: Uint8Array[] };
+type PngInfo = Dimensions & { depth: number; color: number; channels: number; palette: number; interlaced: boolean; data: Uint8Array[] };
 const ascii = (bytes: Uint8Array, at: number, length: number) => String.fromCharCode(...bytes.subarray(at, at + length));
 const crcTable = Uint32Array.from({ length: 256 }, (_, index) => {
   let value = index;
@@ -85,7 +90,7 @@ function pngInfo(bytes: Uint8Array): PngInfo | null {
       const depths: Record<number, number[]> = { 0: [1, 2, 4, 8, 16], 2: [8, 16], 3: [1, 2, 4, 8], 4: [8, 16], 6: [8, 16] };
       if (!width || !height || width > 0x7fffffff || height > 0x7fffffff || !depths[color]?.includes(depth)
         || bytes[offset + 18] !== 0 || bytes[offset + 19] !== 0 || bytes[offset + 20] > 1) return null;
-      info = { width, height, depth, channels: ({ 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 } as Record<number, number>)[color], interlaced: bytes[offset + 20] === 1, data: [] };
+      info = { width, height, depth, color, channels: ({ 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 } as Record<number, number>)[color], palette: 0, interlaced: bytes[offset + 20] === 1, data: [] };
     } else if (type === 'IDAT') {
       if (endedData || color === 3 && !palette) return null;
       dataSize += size;
@@ -96,9 +101,9 @@ function pngInfo(bytes: Uint8Array): PngInfo | null {
       if (type === 'PLTE') {
         if (palette || info!.data.length || !size || size > 768 || size % 3 || [0, 4].includes(color)
           || color === 3 && size / 3 > 2 ** info!.depth) return null;
-        palette = true;
+        palette = true; info!.palette = size / 3;
       } else if (type === 'tRNS') {
-        if (seen.has(type) || info!.data.length || (color === 0 ? size !== 2 : color === 2 ? size !== 6 : color === 3 ? !palette || !size || size > 256 : true)) return null;
+        if (seen.has(type) || info!.data.length || (color === 0 ? size !== 2 : color === 2 ? size !== 6 : color === 3 ? !palette || !size || size > info!.palette : true)) return null;
       } else if (['acTL', 'fcTL', 'fdAT'].includes(type) || type[0] === type[0].toUpperCase()) return null;
       metadata += size;
       if (metadata > MAX_METADATA_BYTES) return null;
@@ -141,7 +146,12 @@ function jpegInfo(bytes: Uint8Array): Dimensions | null {
       while (cursor < end) {
         const precision = bytes[cursor] >> 4, id = bytes[cursor] & 15;
         if (precision > 1 || id > 3) return null;
-        cursor += 1 + 64 * (precision + 1);
+        const start = cursor + 1, size = 64 * (precision + 1);
+        if (start + size > end) return null;
+        for (let index = 0; index < 64; index++) {
+          if ((precision ? view.getUint16(start + index * 2) : bytes[start + index]) === 0) return null;
+        }
+        cursor = start + size;
       }
       if (cursor !== end || length === 2) return null;
       quantization = true;
@@ -149,8 +159,12 @@ function jpegInfo(bytes: Uint8Array): Dimensions | null {
       let cursor = offset + 2;
       while (cursor < end) {
         if (cursor + 17 > end || bytes[cursor] >> 4 > 1 || (bytes[cursor] & 15) > 3) return null;
-        let symbols = 0;
-        for (let index = 1; index <= 16; index++) symbols += bytes[cursor + index];
+        let symbols = 0, available = 1;
+        for (let index = 1; index <= 16; index++) {
+          const count = bytes[cursor + index];
+          symbols += count; available = available * 2 - count;
+          if (available < 0) return null;
+        }
         if (!symbols || symbols > 256) return null;
         cursor += 17 + symbols;
       }
@@ -197,7 +211,7 @@ function webpInfo(bytes: Uint8Array): Dimensions | null {
   let offset = 12, parts = 0, flags = 0, metadata = 0, alpha = false;
   let canvas: Dimensions | undefined, image: Dimensions | undefined;
   const seen = new Set<string>();
-  while (offset + 8 <= bytes.length && ++parts <= MAX_IMAGE_PARTS) {
+  while (offset + 8 <= bytes.length && ++parts <= MAX_WEBP_PARTS) {
     const type = ascii(bytes, offset, 4), size = view.getUint32(offset + 4, true), start = offset + 8, end = start + size;
     const next = end + (size % 2);
     if (!/^[\x20-\x7e]{4}$/.test(type) || next > bytes.length || size % 2 && bytes[end] !== 0) return null;
@@ -227,7 +241,7 @@ function webpInfo(bytes: Uint8Array): Dimensions | null {
         || (bytes[start] & 3) === 0 && size !== 1 + canvas.width * canvas.height) return null;
       alpha = true;
     } else {
-      if (type === 'ANIM' || type === 'ANMF' || !canvas
+      if (!['ICCP', 'EXIF', 'XMP '].includes(type) || !size || !canvas
         || type === 'ICCP' && (image || !(flags & 32))
         || type === 'EXIF' && (!image || !(flags & 8))
         || type === 'XMP ' && (!image || !(flags & 4))) return null;
@@ -247,20 +261,20 @@ export function inspectImageStructure(bytes: Uint8Array, mime: string): Dimensio
   return info ? { width: info.width, height: info.height } : null;
 }
 
-/** Fully consume PNG's zlib raster stream with an exact scanline budget. This
- * catches truncated/invalid deflate, forged dimensions and decompression bombs
- * without retaining decoded pixels. JPEG/WebP still require external decoders. */
+/** Fully consume PNG's zlib raster with an exact scanline budget. Indexed images
+ * also reconstruct filter rows and validate each palette index. At most two
+ * scanlines are retained; JPEG/WebP still require external entropy decoders. */
 export async function validPngRaster(bytes: Uint8Array, maxDimension: number): Promise<boolean> {
   if (!(bytes instanceof Uint8Array) || bytes.byteLength > MAX_IMAGE_BYTES
     || !Number.isSafeInteger(maxDimension) || maxDimension < 1 || maxDimension > 4096) return false;
   const info = pngInfo(bytes);
   if (!info || info.width > maxDimension || info.height > maxDimension) return false;
-  const passes = info.interlaced ? [[0, 0, 8, 8], [4, 0, 8, 8], [0, 4, 4, 8], [2, 0, 4, 4], [0, 2, 2, 4], [1, 0, 2, 2], [0, 1, 1, 2]] : [[0, 0, 1, 1]];
-  const rows: number[] = [];
-  for (const [x, y, dx, dy] of passes) {
-    const width = Math.max(0, Math.ceil((info.width - x) / dx)), height = Math.max(0, Math.ceil((info.height - y) / dy));
-    if (width) for (let row = 0; row < height; row++) rows.push(1 + Math.ceil(width * info.depth * info.channels / 8));
-  }
+  const passConfig = info.interlaced ? [[0, 0, 8, 8], [4, 0, 8, 8], [0, 4, 4, 8], [2, 0, 4, 4], [0, 2, 2, 4], [1, 0, 2, 2], [0, 1, 1, 2]] : [[0, 0, 1, 1]];
+  const passes = passConfig.map(([x, y, dx, dy]) => ({
+    width: Math.max(0, Math.ceil((info.width - x) / dx)), height: Math.max(0, Math.ceil((info.height - y) / dy)),
+  })).filter(pass => pass.width && pass.height);
+  const bits = info.depth * info.channels, bpp = Math.max(1, Math.ceil(bits / 8));
+  const expected = passes.reduce((total, pass) => total + (1 + Math.ceil(pass.width * bits / 8)) * pass.height, 0);
   let part = 0, offset = 0;
   const source = new ReadableStream<BufferSource>({ pull(controller) {
     while (part < info.data.length && offset === info.data[part].length) { part++; offset = 0; }
@@ -272,17 +286,42 @@ export async function validPngRaster(bytes: Uint8Array, maxDimension: number): P
     controller.enqueue(chunk); offset = end;
   } });
   const reader = source.pipeThrough(new DecompressionStream('deflate')).getReader();
-  let row = 0, column = 0;
+  let decoded = 0, passIndex = 0, rowIndex = 0, rowOffset = 0;
+  let row = new Uint8Array(1 + Math.ceil(passes[0].width * bits / 8)), previous = new Uint8Array(row.length - 1);
+  const reject = () => { void reader.cancel().catch(() => {}); return false; };
   try {
     for (;;) {
       const { done, value } = await reader.read();
-      if (done) return row === rows.length && column === 0;
-      let at = 0;
-      while (at < value.length) {
-        if (row >= rows.length || column === 0 && value[at] > 4) { void reader.cancel().catch(() => {}); return false; }
-        const take = Math.min(rows[row] - column, value.length - at);
-        column += take; at += take;
-        if (column === rows[row]) { row++; column = 0; }
+      if (done) return decoded === expected && passIndex === passes.length && rowOffset === 0;
+      decoded += value.byteLength;
+      if (decoded > expected) return reject();
+      let offset = 0;
+      while (offset < value.length) {
+        const copied = Math.min(row.length - rowOffset, value.length - offset);
+        row.set(value.subarray(offset, offset + copied), rowOffset); rowOffset += copied; offset += copied;
+        if (rowOffset !== row.length) continue;
+        const filter = row[0];
+        if (filter > 4) return reject();
+        if (info.color === 3) {
+          for (let index = 1; index < row.length; index++) {
+            const left = index > bpp ? row[index - bpp] : 0, up = previous[index - 1], upperLeft = index > bpp ? previous[index - bpp - 1] : 0;
+            const p = left + up - upperLeft, a = Math.abs(p - left), b = Math.abs(p - up), c = Math.abs(p - upperLeft);
+            const predictor = filter === 0 ? 0 : filter === 1 ? left : filter === 2 ? up : filter === 3 ? (left + up) >> 1 : a <= b && a <= c ? left : b <= c ? up : upperLeft;
+            row[index] = (row[index] + predictor) & 255;
+          }
+          for (let x = 0; x < passes[passIndex].width; x++) {
+            const bit = x * info.depth, index = (row[1 + (bit >> 3)] >> (8 - info.depth - (bit & 7))) & ((1 << info.depth) - 1);
+            if (index >= info.palette) return reject();
+          }
+          previous.set(row.subarray(1));
+        }
+        rowOffset = 0; rowIndex++;
+        if (rowIndex === passes[passIndex].height) {
+          passIndex++; rowIndex = 0;
+          if (passIndex < passes.length) {
+            row = new Uint8Array(1 + Math.ceil(passes[passIndex].width * bits / 8)); previous = new Uint8Array(row.length - 1);
+          }
+        }
       }
     }
   } catch { return false; }
