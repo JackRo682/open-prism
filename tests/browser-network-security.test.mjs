@@ -7,7 +7,9 @@ import ts from 'typescript';
 
 const output = new URL('../.sites-runtime/browser-network-tests/', import.meta.url);
 await mkdir(output, { recursive: true });
-const source = await readFile(new URL('../lib/browser-workspace.ts', import.meta.url), 'utf8');
+const authorization = await readFile(new URL('../lib/authorization.ts', import.meta.url), 'utf8');
+await writeFile(new URL('authorization.mjs', output), ts.transpileModule(authorization, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText);
+const source = (await readFile(new URL('../lib/browser-workspace.ts', import.meta.url), 'utf8')).replaceAll("'./authorization'", "'./authorization.mjs'");
 await writeFile(new URL('browser.mjs', output), ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
 }).outputText);

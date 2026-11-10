@@ -1,3 +1,4 @@
+import { findOwnedResource } from './authorization';
 import { BillingError } from './billing';
 import { reserveMedia } from './beta';
 import { getWorkspaceCapabilities, WorkspaceToolError, betaDailyLimit, MEDIA_RESERVATION_MICROS } from './workspace-tools';
@@ -79,7 +80,7 @@ export async function handleMedia(req:Request,path:string[],sql:D1Database,owner
   const input:MediaInput={prompt:body.prompt.trim(),aspect:body.aspect as '16:9'|'9:16'|undefined};
   if(body.referenceId!==undefined){
    if(typeof body.referenceId!=='string')throw new BillingError('참고 이미지를 확인해주세요.',400);
-   const reference=await sql.prepare("SELECT * FROM media_assets WHERE id=? AND user_id=? AND kind='reference'").bind(body.referenceId,owner).first<MediaRow>();
+   const reference=await findOwnedResource<MediaRow>(sql,'reference',body.referenceId,owner);
    const object=isOwnedObjectKey(reference?.object_key,owner,'references')?await env.BUCKET.get(reference!.object_key!):null;
    if(!reference||!object)throw new BillingError('참고 이미지를 찾을 수 없습니다. 다시 업로드해주세요.',404);
    if(reference.size<1||reference.size>MAX_REFERENCE_BYTES||object.size>MAX_REFERENCE_BYTES)throw new BillingError('참고 이미지를 다시 업로드해주세요.',400);
@@ -116,7 +117,7 @@ export async function handleMedia(req:Request,path:string[],sql:D1Database,owner
   }
  }
  if(path.length>=2){
-  const row=await sql.prepare('SELECT * FROM media_assets WHERE id=? AND user_id=?').bind(path[1],owner).first<MediaRow>();
+  const row=await findOwnedResource<MediaRow>(sql,'media',path[1],owner);
   if(!row)return json({error:'미디어를 찾을 수 없습니다.'},404);
   if(req.method==='GET'&&path.length===3&&path[2]==='content'){
    if(!isOwnedObjectKey(row.object_key,owner,row.kind==='reference'?'references':'media')||row.status!=='complete')return json({error:'파일이 아직 준비되지 않았습니다.'},404);

@@ -29,6 +29,9 @@ Personalization, memory, reusable skills, share snapshots/revocation, theme pers
 | --- | --- |
 | `DB` | D1 database. Apply all migrations through `0005_media_and_browser.sql`. |
 | `BUCKET` | Private R2 storage for documents, notebooks, media, references, and generated files. |
+| `APP_ORIGIN` | Required canonical HTTPS origin for platform identity (production: `https://getopenprism.com`). Foreign, missing, or malformed ingress assertions are anonymous. |
+| `GUEST_SESSION_SIGNING_SECRET` | Required independent server secret of 32–256 characters, distinct from the provider key; guest chat stays unavailable until configured. |
+| `GUEST_BOT_PROTECTION` | `proof-of-work` (default) or `turnstile`. Turnstile additionally requires production `TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET_KEY`, and `APP_ORIGIN`. |
 | `OPENAI_API_KEY` | Server secret for the beta text model, web search, Code Interpreter, and images; actual account/model access still applies. |
 | `GUEST_CHAT_ENABLED=false` | Optional kill switch for anonymous inference. Without this override, guest chat uses the existing key and shared beta lifetime allowance. |
 | `BETA_MODE=true`, `PAYMENTS_MODE=disabled` | Existing bounded beta configuration. Customer payments remain disabled. |
@@ -82,3 +85,5 @@ Conversations, documents, media, generated files, settings, browser captures, an
 Commercial billing remains gated by its separate rate/launch configuration, `TOSS_SECRET_KEY`, `TOSS_CLIENT_KEY`, and `LAUNCH_APPROVED`. This change does not enable customer payments or approve additional spend.
 
 The [November 10 security backport](docs/security-backport-2026-11-10.md) documents the integration, storage, request-capacity and upload safeguards added to this GitHub baseline, their verification commands, and the remaining infrastructure checks.
+
+The [authentication, guest-abuse and supply-chain backport](docs/security-auth-guest-backport-2026-11-10.md) adds canonical ingress checks, independent guest signing, one-use challenges, isolated guest/account budget portions, shared ownership checks and reproducible security gates. This is a focused backport onto the existing GitHub feature baseline; it is not the complete newer Sites source tree.

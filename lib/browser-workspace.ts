@@ -1,3 +1,5 @@
+import { findOwnedResource } from './authorization';
+
 export type BrowserEnvironment = {
   BROWSERLESS_API_TOKEN?: string;
   BROWSERLESS_ENDPOINT?: string;
@@ -313,8 +315,7 @@ export async function handleBrowser(req: Request, path: string[], sql: D1Databas
       return json({ deleted: true });
     }
     if (path.length === 3 && ['GET', 'DELETE'].includes(req.method)) {
-      const row = await sql.prepare('SELECT id,url,title,content,created_at FROM browser_sessions WHERE id=? AND user_id=?').bind(path[2], owner)
-        .first<{ id: string; url: string; title: string; content: string; created_at: number }>();
+      const row = await findOwnedResource<{ id: string; url: string; title: string; content: string; created_at: number }>(sql, 'browser', path[2], owner);
       if (!row) return json({ error: '저장된 원격 페이지를 찾을 수 없습니다.' }, 404);
       if (req.method === 'DELETE') {
         await sql.prepare('DELETE FROM browser_sessions WHERE id=? AND user_id=?').bind(path[2], owner).run();

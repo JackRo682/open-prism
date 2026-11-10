@@ -13,7 +13,7 @@ const objects = new Map(), originalFetch = globalThis.fetch;
 const env = {};
 globalThis.__apiSecurityTest = { env, getChatGPTUser: async () => user };
 await writeFile(new URL('context.mjs', runtime), 'export const {env,getChatGPTUser}=globalThis.__apiSecurityTest;');
-const modules = ['models','provider','billing','beta','workspace-settings','workspace-tools','media-provider','media-workspace','browser-workspace','scheduled-tasks','schedule-time','work-artifacts','guest-chat','guest-import','request-security','upload-security','api-resource-guards'];
+const modules = ['authorization','models','provider','billing','beta','workspace-settings','workspace-tools','media-provider','media-workspace','browser-workspace','scheduled-tasks','schedule-time','work-artifacts','guest-chat','guest-import','request-security','upload-security','api-resource-guards'];
 for (const [source, target] of [...modules.map(name => ['lib/' + name + '.ts', name + '.mjs']), ['app/api/[...path]/route.ts', 'route.mjs']]) {
   let code = (await readFile(new URL('../' + source, import.meta.url), 'utf8'))
     .replaceAll("'cloudflare:workers'", "'./context.mjs'")
@@ -61,7 +61,7 @@ beforeEach(() => {
   env.BUCKET = {
     async put(key, value) { objects.set(key, value); },
     async delete(key) { objects.delete(key); },
-    async get(key) { return objects.has(key) ? { text: async () => objects.get(key) } : null; },
+    async get(key) { if (!objects.has(key)) return null; const bytes = new TextEncoder().encode(objects.get(key)); return { size: bytes.byteLength, body: new Blob([bytes]).stream(), text: async () => objects.get(key), arrayBuffer: async () => bytes.buffer }; },
   };
   globalThis.fetch = async () => { throw new Error('Unexpected provider request'); };
 });
@@ -83,6 +83,114 @@ const success = () => new Response([
   { type: 'response.output_text.delta', delta: 'A test answer.' },
   { type: 'response.completed', response: { usage: { input_tokens: 10, output_tokens: 5 } } },
 ].map(event => 'data: ' + JSON.stringify(event) + '\n\n').join(''), { headers: { 'content-type': 'text/event-stream' } });
+
+function seedPrivateResources() {
+  const now = Date.now();
+  sqlite.prepare('INSERT INTO conversations (id,user_id,title,model,created_at,updated_at) VALUES (?,?,?,?,?,?)')
+    .run('owned-chat', 'alice', 'PRIVATE-OWNER-TITLE', 'gpt-6.1-sol', now, now);
+  sqlite.prepare('INSERT INTO messages (id,conversation_id,role,content,model,created_at) VALUES (?,?,?,?,?,?)')
+    .run('owned-message', 'owned-chat', 'assistant', 'PRIVATE-OWNER-MESSAGE', 'gpt-6.1-sol', now);
+  sqlite.prepare('INSERT INTO files (id,user_id,name,key,size,type,created_at) VALUES (?,?,?,?,?,?,?)')
+    .run('owned-file', 'alice', 'PRIVATE-OWNER-FILE', 'alice/private-file', 26, 'text/plain', now);
+  objects.set('alice/private-file', 'PRIVATE-OWNER-FILE-CONTENT');
+  sqlite.prepare('INSERT INTO public_shares (id,user_id,conversation_id,token,title,snapshot,created_at) VALUES (?,?,?,?,?,?,?)')
+    .run('owned-share', 'alice', 'owned-chat', 'a'.repeat(64), 'PUBLIC-SHARE-TITLE', '[]', now);
+  for (const [id, kind, key] of [['owned-media', 'image', 'alice/media/private-media'], ['owned-reference', 'reference', 'alice/references/private-reference']]) {
+    sqlite.prepare("INSERT INTO media_assets (id,user_id,kind,prompt,model,status,object_key,mime_type,size,created_at,updated_at) VALUES (?,?,?,?,?,'complete',?,'image/png',7,?,?)")
+      .run(id, 'alice', kind, 'PRIVATE-OWNER-PROMPT', 'test-image', key, now, now);
+  }
+  sqlite.prepare('INSERT INTO browser_sessions (id,user_id,url,title,content,created_at) VALUES (?,?,?,?,?,?)')
+    .run('owned-browser', 'alice', 'https://example.com/', 'PRIVATE-OWNER-BROWSER', JSON.stringify({ text: 'PRIVATE-OWNER-PAGE', links: [] }), now);
+  sqlite.prepare("INSERT INTO scheduled_tasks (id,user_id,title,prompt,model,timezone,recurrence,scheduled_at,next_run,created_at,updated_at) VALUES (?,?,?,?,?,?,'once',?,?,?,?)")
+    .run('owned-task', 'alice', 'PRIVATE-OWNER-TASK', 'PRIVATE-OWNER-INSTRUCTION', 'gpt-6.1-sol', 'Asia/Seoul', now + 60000, now + 60000, now, now);
+  sqlite.prepare('INSERT INTO work_artifacts (id,user_id,conversation_id,name,object_key,mime_type,size,created_at) VALUES (?,?,?,?,?,?,?,?)')
+    .run('owned-artifact', 'alice', 'owned-chat', 'PRIVATE-OWNER-ARTIFACT', 'alice/artifacts/private-artifact', 'application/octet-stream', 7, now);
+  objects.set('alice/artifacts/private-artifact', 'private');
+}
+
+test('36 anonymous and foreign private-object operations fail before provider/storage effects and preserve owner records', async () => {
+  seedPrivateResources();
+  const cases = [
+    ['conversations/owned-chat', 'GET'],
+    ['conversations/owned-chat', 'PATCH', { title: 'Stolen' }],
+    ['conversations/owned-chat', 'DELETE'],
+    ['shares', 'POST', { conversationId: 'owned-chat' }], ['shares/owned-share', 'DELETE'],
+    ['files/owned-file', 'GET'], ['files/owned-file', 'DELETE'],
+    ['media/owned-media', 'GET'], ['media/owned-media/content', 'GET'],
+    ['media/owned-media/refresh', 'POST', {}], ['media/owned-media', 'DELETE'],
+    ['browser/sessions/owned-browser', 'GET'], ['browser/sessions/owned-browser', 'DELETE'],
+    ['tasks/owned-task', 'GET'], ['tasks/owned-task', 'PATCH', { title: 'Stolen' }],
+    ['tasks/owned-task', 'DELETE'], ['tasks/owned-task/run', 'POST', {}],
+    ['artifacts/owned-artifact', 'GET'],
+  ];
+  assert.equal(cases.length, 18);
+  const tables = ['conversations', 'messages', 'files', 'public_shares', 'media_assets', 'browser_sessions', 'scheduled_tasks', 'work_artifacts', 'usage', 'wallet_events'];
+  const snapshot = () => tables.map(table => sqlite.prepare('SELECT * FROM ' + table + ' ORDER BY rowid').all());
+  const before = snapshot();
+  let providerCalls = 0, storageCalls = 0;
+  globalThis.fetch = async () => { providerCalls++; throw new Error('Foreign requests must not contact a provider'); };
+  env.BUCKET = Object.fromEntries(['get', 'put', 'delete'].map(method => [method, async () => { storageCalls++; throw new Error('Foreign requests must not touch storage'); }]));
+  for (const account of [null, { userId: 'bob', email: 'bob@example.test' }]) {
+    user = account;
+    for (const [path, method, body] of cases) {
+      const response = await call(path, method, body, {
+        'oai-authenticated-user-id': 'alice', 'oai-authenticated-user-email': 'alice@example.test',
+        'x-prism-owner': 'alice', 'x-user-id': 'alice',
+      });
+      assert.equal(response.status, account ? 404 : 401, method + ' ' + path);
+      assert.doesNotMatch(await response.text(), /PRIVATE-OWNER|alice\/private|"user_id"/);
+    }
+  }
+  assert.equal(providerCalls, 0); assert.equal(storageCalls, 0);
+  assert.deepEqual(snapshot(), before, 'denied operations cannot alter private data or balances');
+});
+
+test('foreign conversation, file and reference identifiers in request bodies cannot invoke providers or read storage', async () => {
+  seedPrivateResources();
+  let providerCalls = 0, storageCalls = 0;
+  globalThis.fetch = async () => { providerCalls++; throw new Error('Foreign inputs must not contact a provider'); };
+  env.BUCKET = Object.fromEntries(['get', 'put', 'delete'].map(method => [method, async () => { storageCalls++; throw new Error('Foreign inputs must not touch storage'); }]));
+  for (const account of [null, { userId: 'bob', email: 'bob@example.test' }]) {
+    user = account;
+    for (const [path, body, status] of [
+      ['chat', chat({ conversationId: 'owned-chat', user_id: 'alice', owner: 'alice' }), 404],
+      ['chat', chat({ fileIds: ['owned-file'], user_id: 'alice', owner: 'alice' }), 400],
+      ['media', { kind: 'image', prompt: 'A tree', referenceId: 'owned-reference' }, 404],
+    ]) assert.equal((await call(path, 'POST', body)).status, account ? status : 401, path);
+  }
+  assert.equal(providerCalls, 0); assert.equal(storageCalls, 0);
+  assert.equal(sqlite.prepare('SELECT COUNT(*) n FROM usage').get().n, 0);
+  assert.equal(sqlite.prepare('SELECT COUNT(*) n FROM conversations').get().n, 1);
+  assert.equal(sqlite.prepare('SELECT content FROM messages WHERE id=?').get('owned-message').content, 'PRIVATE-OWNER-MESSAGE');
+});
+
+test('owner reads work and private collection filters ignore caller ownership parameters', async () => {
+  seedPrivateResources();
+  for (const path of ['conversations/owned-chat', 'files/owned-file', 'media/owned-media', 'browser/sessions/owned-browser', 'tasks/owned-task', 'artifacts/owned-artifact']) {
+    assert.equal((await call(path, 'GET')).status, 200, path);
+  }
+  assert.equal((await (await call('conversations/owned-chat', 'GET')).json()).messages[0].content, 'PRIVATE-OWNER-MESSAGE');
+  user = { userId: 'bob', email: 'bob@example.test' };
+  for (const path of ['conversations', 'files', 'shares', 'media', 'browser/sessions', 'tasks', 'usage', 'billing', 'search?q=PRIVATE-OWNER']) {
+    const response = await call(path + (path.includes('?') ? '&' : '?') + 'user_id=alice&owner=alice', 'GET');
+    assert.equal(response.status, 200, path);
+    assert.doesNotMatch(await response.text(), /PRIVATE-OWNER|owned-chat|owned-file|owned-media|owned-browser|owned-task|owned-artifact|alice\/private/);
+  }
+});
+
+test('central private-object lookup rejects missing owners, unknown resource names and injection attempts', async () => {
+  const { findOwnedResource } = await import(new URL('authorization.mjs', runtime));
+  seedPrivateResources();
+  let queries = 0;
+  const inaccessible = { prepare() { queries++; throw new Error('Invalid ownership must not query data'); } };
+  for (const owner of ['', '  ', undefined, null]) assert.equal(await findOwnedResource(inaccessible, 'file', 'owned-file', owner), null);
+  for (const resource of ['__proto__', 'constructor', "files WHERE user_id='alice' --"])
+    assert.equal(await findOwnedResource(inaccessible, resource, 'owned-file', 'bob'), null);
+  assert.equal(queries, 0);
+  assert.equal((await findOwnedResource(env.DB, 'file', 'owned-file', 'alice')).id, 'owned-file');
+  assert.equal(await findOwnedResource(env.DB, 'file', 'owned-file', 'bob'), null);
+  assert.equal(await findOwnedResource(env.DB, 'file', "owned-file' OR 1=1 --", 'bob'), null);
+});
 
 test('body boundaries cancel the actual source for oversized streaming uploads, without trusting Content-Length', async () => {
   for (const declared of [undefined, '1']) {

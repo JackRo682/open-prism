@@ -1,15 +1,16 @@
-import { BETA_OUTPUT, betaCost } from './beta';
+import { BETA_OUTPUT, betaCost, BETA_GUEST_BUDGET_MICROS, BETA_TOTAL_BUDGET_MICROS } from './beta';
 import { findModel } from './models';
 import { invokeProvider, type Turn } from './provider';
 
-/** Guest inference shares the existing, durable beta ledger and lifetime budget. */
+/** Guest inference has its own ceiling inside the original durable beta budget. */
 export const GUEST_POLICY = Object.freeze({
   model: 'gpt-6.1-sol',
   sessionDailyRequests: 5,
   networkDailyRequests: 20,
   siteDailyRequests: 100,
   siteDailyBudgetMicros: 2_000_000,
-  betaLifetimeBudgetMicros: 8_000_000,
+  guestLifetimeBudgetMicros: BETA_GUEST_BUDGET_MICROS,
+  betaLifetimeBudgetMicros: BETA_TOTAL_BUDGET_MICROS,
   maxPromptBytes: 4_000,
   maxInputBytes: 12_000,
   maxHistoryTurns: 8,
@@ -26,10 +27,12 @@ const encoder = new TextEncoder();
 const byteLength = (value: string) => encoder.encode(value).byteLength;
 const hex = (bytes: ArrayBuffer | Uint8Array) => Array.from(new Uint8Array(bytes), byte => byte.toString(16).padStart(2, '0')).join('');
 const dayStart = (now: number) => Math.floor(now / 86_400_000) * 86_400_000;
-type GuestEnvironment = Pick<Cloudflare.Env, 'OPENAI_API_KEY' | 'GUEST_CHAT_ENABLED'>;
+type GuestEnvironment = Pick<Cloudflare.Env, 'OPENAI_API_KEY' | 'GUEST_CHAT_ENABLED' | 'GUEST_SESSION_SIGNING_SECRET' | 'GUEST_BOT_PROTECTION' | 'TURNSTILE_SITE_KEY' | 'TURNSTILE_SECRET_KEY' | 'APP_ORIGIN'>;
 type Identity = { owner: string; snapshot: string; cookie?: string };
-type GuestInput = { requestId: string; turns: Turn[]; inputBound: number };
-type Allowance = { sessionCount: number; networkCount: number; siteCount: number; dailyReserved: number; betaReserved: number };
+type GuestInput = { requestId: string; turns: Turn[]; inputBound: number; proof?: {token: string; solution: string}; turnstileToken?: string };
+type Allowance = { sessionCount: number; networkCount: number; siteCount: number; dailyReserved: number; guestReserved: number; betaReserved: number };
+type Defense = { kind: 'proof-of-work' } | {kind: 'turnstile'; siteKey: string; secret: string; hostname: string};
+const PROOF_TTL = 120_000;
 
 class GuestError extends Error {
   constructor(public code: string, message: string, public status = 400) { super(message); }
@@ -47,6 +50,7 @@ function publicModel() {
   const model = findModel(GUEST_POLICY.model);
   return { id: GUEST_POLICY.model, name: model?.name || 'GPT-6.1 Sol', provider: 'openai' };
 }
+
 
 function publicLimits(now: number) {
   return {
@@ -91,15 +95,18 @@ function networkBucket(req: Request) {
 }
 
 async function signingKey(secret: string) {
-  // Domain-separated HMAC uses the existing server-only key; no key or raw IP
-  // is sent to the browser or retained in the guest ledger.
+  // Provider key rotation does not affect guest cookies or network quotas.
   return crypto.subtle.importKey('raw', encoder.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify']);
 }
 async function sign(key: CryptoKey, scope: string, value: string) {
   return hex(await crypto.subtle.sign('HMAC', key, encoder.encode('openprism:guest:v1:' + scope + ':' + value)));
 }
 async function identity(req: Request, key: CryptoKey, now: number, create: boolean): Promise<Identity> {
-  const cookieValue = req.headers.get('cookie')?.split(';').map(part => part.trim()).find(part => part.startsWith(COOKIE + '='))?.slice(COOKIE.length + 1);
+  const rawCookies = req.headers.get('cookie') || '';
+  if (rawCookies.length > 16384) throw new GuestError('GUEST_SESSION_REQUIRED', '체험 세션을 다시 시작해주세요.', 401);
+  const matches = rawCookies.split(';').map(part => part.trim()).filter(part => part.startsWith(COOKIE + '='));
+  if (matches.length > 1) throw new GuestError('GUEST_SESSION_REQUIRED', '체험 세션을 다시 시작해주세요.', 401);
+  const cookieValue = matches[0]?.slice(COOKIE.length + 1);
   let session = '';
   const scope = 'cookie:' + new URL(req.url).origin;
   const match = cookieValue && /^v1\.([a-f\d]{64})\.(\d{13})\.([a-f\d]{64})$/.exec(cookieValue);
@@ -119,6 +126,76 @@ async function identity(req: Request, key: CryptoKey, now: number, create: boole
   }
   const [owner, network] = await Promise.all([sign(key, 'session', session), sign(key, 'network', networkBucket(req))]);
   return { owner: 'guest:' + owner, snapshot: SNAPSHOT_PREFIX + network, cookie };
+}
+
+function defenseConfiguration(environment: GuestEnvironment): Defense | null {
+  const mode = environment.GUEST_BOT_PROTECTION || 'proof-of-work';
+  if (mode === 'proof-of-work') return {kind: mode};
+  if (mode !== 'turnstile') return null;
+  try {
+    const origin = new URL(environment.APP_ORIGIN || '');
+    const siteKey = environment.TURNSTILE_SITE_KEY || '', secret = environment.TURNSTILE_SECRET_KEY || '';
+    // Reject public testing keys and partial configuration in production.
+    if (origin.protocol !== 'https:' || origin.username || origin.password || origin.pathname !== '/' || origin.search || origin.hash
+      || !/^[\w-]{10,100}$/.test(siteKey) || !/^[\w-]{10,100}$/.test(secret)
+      || /^[123]x0{10}/.test(siteKey) || /^[123]x0{10}/.test(secret)) return null;
+    return {kind: mode, siteKey, secret, hostname: origin.hostname};
+  } catch { return null; }
+}
+
+async function requestRate(sql: D1Database, key: string, limit: number, now: number) {
+  return !!await sql.prepare(`INSERT INTO rate_limits (key,count,expires_at) VALUES (?,1,?)
+    ON CONFLICT(key) DO UPDATE SET count=CASE WHEN expires_at<=? THEN 1 ELSE count+1 END,
+    expires_at=CASE WHEN expires_at<=? THEN excluded.expires_at ELSE expires_at END
+    WHERE expires_at<=? OR count<? RETURNING key`).bind(key, now + 60_000, now, now, now, limit).first();
+}
+
+async function challengeFor(key: CryptoKey, who: Identity, state: Allowance, now: number, defense: Defense) {
+  if (defense.kind === 'turnstile') return {kind: 'turnstile', siteKey: defense.siteKey, action: 'guest_chat'};
+  // A bounded cost challenge slows automated issuance without claiming to
+  // distinguish a human from an automated client. Turnstile is the managed option.
+  const difficulty = state.networkCount >= 8 ? 17 : 15;
+  const expires = now + PROOF_TTL, random = hex(crypto.getRandomValues(new Uint8Array(16)));
+  const payload = `v1.${expires}.${difficulty}.${random}`;
+  const signature = await sign(key, 'proof', `${who.owner}:${who.snapshot}:${payload}`);
+  return {kind: 'proof-of-work', token: `${payload}.${signature}`, difficulty, expiresAt: new Date(expires).toISOString()};
+}
+
+async function verifyChallenge(sql: D1Database, who: Identity, key: CryptoKey, input: GuestInput, defense: Defense, signal: AbortSignal) {
+  let proofId: string, expires: number;
+  if (defense.kind === 'turnstile') {
+    if (!input.turnstileToken || input.turnstileToken.length > 2048) throw new GuestError('GUEST_CHALLENGE_REQUIRED', '보안 확인을 완료한 후 다시 시도해주세요.', 403);
+    const timeout = AbortSignal.timeout(8000);
+    let result: {success?: boolean; hostname?: string; action?: string};
+    try {
+      const response = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {method: 'POST', redirect: 'error',
+        headers: {'Content-Type': 'application/json'}, signal: AbortSignal.any([signal, timeout]),
+        body: JSON.stringify({secret: defense.secret, response: input.turnstileToken, idempotency_key: crypto.randomUUID()})});
+      if (!response.ok) throw new Error('Verification unavailable');
+      result = await response.json() as typeof result;
+    } catch { throw new GuestError('GUEST_CHALLENGE_UNAVAILABLE', '보안 확인에 연결하지 못했습니다. 다시 시도해주세요.', 503); }
+    if (result?.success !== true || result.hostname !== defense.hostname || result.action !== 'guest_chat') throw new GuestError('GUEST_CHALLENGE_INVALID', '보안 확인이 만료되었습니다. 다시 시도해주세요.', 403);
+    proofId = await sign(key, 'turnstile', input.turnstileToken); expires = Date.now() + 300_000;
+  } else {
+    const proof = input.proof;
+    const match = proof && /^v1\.(\d{13})\.(15|17)\.([a-f\d]{32})\.([a-f\d]{64})$/.exec(proof.token);
+    if (!proof || !match || !/^[a-f\d]{1,8}$/.test(proof.solution)) throw new GuestError('GUEST_CHALLENGE_REQUIRED', '보안 확인을 완료한 후 다시 시도해주세요.', 403);
+    expires = Number(match[1]);
+    if (expires <= Date.now() || expires > Date.now() + PROOF_TTL) throw new GuestError('GUEST_CHALLENGE_EXPIRED', '보안 확인이 만료되었습니다. 다시 시도해주세요.', 403);
+    const payload = proof.token.slice(0, -65), signature = Uint8Array.from(match[4].match(/../g)!, value => parseInt(value, 16));
+    if (!await crypto.subtle.verify('HMAC', key, signature, encoder.encode(`openprism:guest:v1:proof:${who.owner}:${who.snapshot}:${payload}`))) {
+      throw new GuestError('GUEST_CHALLENGE_INVALID', '보안 확인을 다시 진행해주세요.', 403);
+    }
+    const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', encoder.encode(proof.token + ':' + proof.solution)));
+    const bits = Number(match[2]), whole = Math.floor(bits / 8), remainder = bits % 8;
+    if (digest.slice(0, whole).some(value => value !== 0) || remainder && digest[whole] >> (8 - remainder)) throw new GuestError('GUEST_CHALLENGE_INVALID', '보안 확인을 다시 진행해주세요.', 403);
+    proofId = match[4];
+  }
+  // Atomic one-time redemption across worker instances, including concurrent
+  // replays with different request IDs. No provider reservation yet.
+  const consumed = await sql.prepare('INSERT INTO rate_limits (key,count,expires_at) VALUES (?,1,?) ON CONFLICT(key) DO NOTHING RETURNING key')
+    .bind('guest-proof:' + proofId, expires).first();
+  if (!consumed) throw new GuestError('GUEST_CHALLENGE_REPLAYED', '이미 사용된 보안 확인입니다. 다시 시도해주세요.', 403);
 }
 
 async function readInput(req: Request): Promise<GuestInput> {
@@ -150,9 +227,14 @@ async function readInput(req: Request): Promise<GuestInput> {
   catch { throw new GuestError('INVALID_JSON', '요청 내용을 읽을 수 없습니다.'); }
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new GuestError('INVALID_INPUT', '올바른 메시지를 입력해주세요.');
   const body = raw as Record<string, unknown>;
-  if (Object.keys(body).some(key => !['requestId', 'prompt', 'history'].includes(key))) {
+  if (Object.keys(body).some(key => !['requestId', 'prompt', 'history', 'proof', 'turnstileToken'].includes(key))) {
     throw new GuestError('INVALID_INPUT', '로그인 전에는 기본 텍스트 채팅만 사용할 수 있습니다.');
   }
+  if (body.proof !== undefined && (!body.proof || typeof body.proof !== 'object' || Array.isArray(body.proof)
+    || Object.keys(body.proof).some(key => !['token', 'solution'].includes(key))
+    || typeof (body.proof as Record<string, unknown>).token !== 'string' || String((body.proof as Record<string, unknown>).token).length > 180
+    || typeof (body.proof as Record<string, unknown>).solution !== 'string' || String((body.proof as Record<string, unknown>).solution).length > 8)) throw new GuestError('INVALID_INPUT', '올바른 보안 확인이 필요합니다.');
+  if (body.turnstileToken !== undefined && (typeof body.turnstileToken !== 'string' || body.turnstileToken.length > 2048)) throw new GuestError('INVALID_INPUT', '올바른 보안 확인이 필요합니다.');
   if (typeof body.requestId !== 'string' || !/^[a-f\d]{8}-[a-f\d]{4}-4[a-f\d]{3}-[89ab][a-f\d]{3}-[a-f\d]{12}$/i.test(body.requestId)) {
     throw new GuestError('INVALID_REQUEST_ID', '올바른 요청 ID가 필요합니다.');
   }
@@ -175,7 +257,8 @@ async function readInput(req: Request): Promise<GuestInput> {
   turns.push({ role: 'user', content: prompt });
   const inputBytes = turns.reduce((total, turn) => total + byteLength(turn.content), 0);
   if (inputBytes > GUEST_POLICY.maxInputBytes) throw new GuestError('HISTORY_TOO_LARGE', '대화가 길어졌습니다. 새 채팅을 시작하거나 로그인해주세요.', 413);
-  return { requestId: body.requestId.toLowerCase(), turns, inputBound: inputBytes + 4096 };
+  return { requestId: body.requestId.toLowerCase(), turns, inputBound: inputBytes + 4096,
+    proof: body.proof as GuestInput['proof'], turnstileToken: body.turnstileToken as string | undefined };
 }
 
 async function allowance(sql: D1Database, who: Identity, now: number): Promise<Allowance> {
@@ -185,6 +268,7 @@ async function allowance(sql: D1Database, who: Identity, now: number): Promise<A
     COALESCE(SUM(CASE WHEN rate_snapshot=? AND created_at>=? THEN 1 ELSE 0 END),0) AS networkCount,
     COALESCE(SUM(CASE WHEN rate_snapshot LIKE 'beta:guest:v1:%' AND created_at>=? THEN 1 ELSE 0 END),0) AS siteCount,
     COALESCE(SUM(CASE WHEN rate_snapshot LIKE 'beta:guest:v1:%' AND created_at>=? THEN reserved_amount ELSE 0 END),0) AS dailyReserved,
+    COALESCE(SUM(CASE WHEN rate_snapshot LIKE 'beta:guest:%' THEN reserved_amount ELSE 0 END),0) AS guestReserved,
     COALESCE(SUM(reserved_amount),0) AS betaReserved
     FROM usage WHERE rate_snapshot LIKE 'beta:%'`).bind(who.owner, day, who.snapshot, day, day, day).first<Allowance>();
   if (!row) throw new Error('Guest allowance unavailable.');
@@ -196,10 +280,10 @@ const remaining = (state: Allowance) => Math.max(0, Math.min(
   GUEST_POLICY.siteDailyRequests - state.siteCount,
 ));
 function budgetAvailable(state: Allowance, amount = betaCost(4097, GUEST_POLICY.maxOutputTokens)) {
-  return state.dailyReserved + amount <= GUEST_POLICY.siteDailyBudgetMicros && state.betaReserved + amount <= GUEST_POLICY.betaLifetimeBudgetMicros;
+  return state.dailyReserved + amount <= GUEST_POLICY.siteDailyBudgetMicros && siteBudgetAvailable(state, amount);
 }
 function siteBudgetAvailable(state: Allowance, amount = betaCost(4097, GUEST_POLICY.maxOutputTokens)) {
-  return state.betaReserved + amount <= GUEST_POLICY.betaLifetimeBudgetMicros;
+  return state.guestReserved + amount <= GUEST_POLICY.guestLifetimeBudgetMicros && state.betaReserved + amount <= GUEST_POLICY.betaLifetimeBudgetMicros;
 }
 
 /** All dimensions and the reservation are checked in one SQLite statement.
@@ -213,6 +297,7 @@ async function reserveGuest(sql: D1Database, who: Identity, ledgerId: string, am
     AND (SELECT COUNT(*) FROM usage WHERE rate_snapshot=? AND created_at>=?) < ?
     AND (SELECT COUNT(*) FROM usage WHERE rate_snapshot LIKE 'beta:guest:v1:%' AND created_at>=?) < ?
     AND (SELECT COALESCE(SUM(reserved_amount),0) FROM usage WHERE rate_snapshot LIKE 'beta:guest:v1:%' AND created_at>=?) + ? <= ?
+    AND (SELECT COALESCE(SUM(reserved_amount),0) FROM usage WHERE rate_snapshot LIKE 'beta:guest:%') + ? <= ?
     AND (SELECT COALESCE(SUM(reserved_amount),0) FROM usage WHERE rate_snapshot LIKE 'beta:%') + ? <= ?
     AND (SELECT COUNT(*) FROM usage WHERE user_id=? AND status='pending' AND created_at>?) < 1
     AND (SELECT COUNT(*) FROM usage WHERE rate_snapshot=? AND status='pending' AND created_at>?) < 2
@@ -221,6 +306,7 @@ async function reserveGuest(sql: D1Database, who: Identity, ledgerId: string, am
     ledgerId, who.owner, GUEST_POLICY.model, now, who.snapshot, amount,
     who.owner, day, GUEST_POLICY.sessionDailyRequests, who.snapshot, day, GUEST_POLICY.networkDailyRequests,
     day, GUEST_POLICY.siteDailyRequests, day, amount, GUEST_POLICY.siteDailyBudgetMicros,
+    amount, GUEST_POLICY.guestLifetimeBudgetMicros,
     amount, GUEST_POLICY.betaLifetimeBudgetMicros, who.owner, activeSince, who.snapshot, activeSince, activeSince,
   ).first<{ id: string }>();
 }
@@ -230,18 +316,24 @@ export async function handleGuest(req: Request, path: string[], sql: D1Database 
   let now = Date.now();
   try {
     validateOrigin(req);
-    const bootstrap = path.length === 2 && path[1] === 'bootstrap' && req.method === 'GET';
+    const bootstrap = path.length === 2 && (path[1] === 'bootstrap' || path[1] === 'challenge') && req.method === 'GET';
     const chat = path.length === 2 && path[1] === 'chat' && req.method === 'POST';
     if (!bootstrap && !chat) return json({ error: 'Endpoint not found.', code: 'NOT_FOUND' }, 404);
-    const model = findModel(GUEST_POLICY.model), secret = environment.OPENAI_API_KEY;
-    if (!sql || !secret || !model || environment.GUEST_CHAT_ENABLED === 'false') {
+    const model = findModel(GUEST_POLICY.model), providerKey = environment.OPENAI_API_KEY;
+    const signingSecret = environment.GUEST_SESSION_SIGNING_SECRET;
+    const defense = defenseConfiguration(environment);
+    if (!sql || !providerKey || !signingSecret || signingSecret === providerKey || signingSecret.length < 32 || signingSecret.length > 256 || /[\r\n\0]/.test(signingSecret) || !defense || !model || model.provider !== 'openai' || environment.GUEST_CHAT_ENABLED === 'false') {
       return json({ ...publicLimits(now), available: false, remaining: 0, code: 'GUEST_UNAVAILABLE', error: '현재 체험 채팅을 이용할 수 없습니다. 잠시 후 다시 시도해주세요.' }, 503);
     }
-    const key = await signingKey(secret), who = await identity(req, key, now, bootstrap);
+    const key = await signingKey(signingSecret), who = await identity(req, key, now, bootstrap && path[1] === 'bootstrap');
+    if (!await requestRate(sql, 'guest-global', 600, now)
+      || !await requestRate(sql, 'guest-network:' + who.snapshot, 60, now)) return json({code: 'GUEST_RATE_LIMIT', error: '요청이 너무 많습니다. 잠시 후 다시 시도해주세요.'}, 429, {'Retry-After': '60'});
     if (bootstrap) {
+      await sql.prepare("DELETE FROM rate_limits WHERE (key LIKE 'guest-proof:%' OR key LIKE 'guest-network:%') AND expires_at<=?").bind(now).run();
       const state = await allowance(sql, who, now);
       const available = budgetAvailable(state), siteExhausted = !siteBudgetAvailable(state);
       return json({ ...publicLimits(now), available, remaining: available ? remaining(state) : 0,
+        ...(available && remaining(state) > 0 ? {challenge: await challengeFor(key, who, state, now, defense)} : {}),
         ...(!available ? siteExhausted
           ? { code: 'GUEST_SITE_LIMIT', limitKind: 'site', resetsAt: null, error: '현재 체험 서비스를 이용할 수 없습니다.' }
           : { code: 'GUEST_DAILY_LIMIT', limitKind: 'daily', error: '오늘의 체험 서비스 한도에 도달했습니다. 한도가 초기화된 후 다시 이용해주세요.' } : {}),
@@ -257,6 +349,16 @@ export async function handleGuest(req: Request, path: string[], sql: D1Database 
     const duplicate = () => sql.prepare('SELECT id FROM usage WHERE id=? AND user_id=?').bind(ledgerId, who.owner).first();
     if (await duplicate()) throw new GuestError('DUPLICATE_REQUEST', '이미 접수된 요청입니다. 새 질문으로 다시 시도해주세요.', 409);
     const amount = betaCost(input.inputBound, GUEST_POLICY.maxOutputTokens);
+    // Quotas are still checked atomically below, after challenge verification.
+    // Avoid spending a challenge request when the durable budget is exhausted.
+    if (!siteBudgetAvailable(state, amount)) return json({available: false, code: 'GUEST_SITE_LIMIT', limitKind: 'site',
+      error: '현재 체험 서비스를 이용할 수 없습니다.', remaining: 0, resetsAt: null}, 503);
+    if (remaining(state) <= 0 || !budgetAvailable(state, amount)) return json({code: 'GUEST_LIMIT_REACHED', limitKind: 'daily',
+      error: '오늘의 체험 한도에 도달했습니다. 한도가 초기화된 후 다시 이용해주세요.', remaining: 0, resetsAt: publicLimits(now).resetsAt}, 429,
+      {'Retry-After': String(Math.ceil((dayStart(now) + 86_400_000 - now) / 1000))});
+    await verifyChallenge(sql, who, key, input, defense, req.signal);
+    if (req.signal.aborted) throw new GuestError('GUEST_ABORTED', '요청이 취소되었습니다.', 408);
+    now = Date.now();
     if (!await reserveGuest(sql, who, ledgerId, amount, now)) {
       if (await duplicate()) throw new GuestError('DUPLICATE_REQUEST', '이미 접수된 요청입니다. 새 질문으로 다시 시도해주세요.', 409);
       const latest = await allowance(sql, who, now);
@@ -289,7 +391,7 @@ export async function handleGuest(req: Request, path: string[], sql: D1Database 
         try {
           emit({ type: 'start', requestId: input.requestId, model: model.id, remaining: left });
           if (aborter.signal.aborted) throw new DOMException('Request aborted.', 'AbortError');
-          const measured = await invokeProvider(model, secret, input.turns, 'low', false, aborter.signal, delta => {
+          const measured = await invokeProvider(model, providerKey, input.turns, 'low', false, aborter.signal, delta => {
             if (aborter.signal.aborted) throw new DOMException('Request aborted.', 'AbortError');
             text += delta; emit({ type: 'delta', text: delta });
           }, GUEST_POLICY.maxOutputTokens);

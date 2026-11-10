@@ -23,7 +23,7 @@ const bundle = await build({
           if (request.headers.get('x-fixture') === 'throw') throw new Error('private-provider-fixture');
           if (request.headers.get('x-fixture') === 'hold') await new Promise(resolve => state.pending.push(resolve));
           const body = request.body ? await request.text() : null;
-          return Response.json({ body, nonce: request.headers.get('x-prism-script-nonce') });
+          return Response.json({ body, nonce: request.headers.get('x-prism-script-nonce'), identity: Object.fromEntries([...request.headers].filter(([name]) => name.startsWith('oai-authenticated-user-'))) });
         } };
       ` }));
     },
@@ -45,6 +45,22 @@ const bundle = await build({
           }, { highWaterMark: 0 }) : '{}' }),
         });
         const call = request => app.fetch(request, env, ctx);
+        if (mode === 'identity') {
+          const results = [];
+          for (const [url, host, configured] of [
+            ['https://prism.test/api/read', 'prism.test', 'https://prism.test'],
+            ['https://other.workers.dev/api/read', 'other.workers.dev', 'https://prism.test'],
+            ['https://other.workers.dev/api/read', 'prism.test', 'https://prism.test'],
+            ['https://prism.test/api/read', 'prism.test', undefined],
+          ]) {
+            const response = await app.fetch(new Request(url, { headers: { host,
+              'oai-authenticated-user-id': 'fixture-owner', 'oai-authenticated-user-email': 'fixture@example.test',
+              'oai-authenticated-user-future-field': 'untrusted-claim', 'x-forwarded-host': 'prism.test' } }),
+              { ...env, APP_ORIGIN: configured }, ctx);
+            results.push(await response.json());
+          }
+          return Response.json(results);
+        }
         if (mode === 'mutation') {
           const response = await call(incoming('/chat', null, true));
           return Response.json({ status: response.status, calls: state.calls, events, headers: Object.fromEntries(response.headers) });
@@ -108,4 +124,14 @@ test('actual Workerd error paths cancel the forwarded live stream, redact detail
   assert.equal(result.acquired, 32);
   assert.equal(result.statuses.every(status => status === 200), true);
   assert.equal(result.events.includes('cancel'), true);
+});
+
+
+test('actual Worker entry strips identity assertions on foreign, host-spoofed, and unconfigured ingress', async () => {
+  const response = await worker.dispatchFetch('https://prism.test/identity');
+  assert.equal(response.status, 200);
+  const results = await response.json();
+  assert.equal(results[0].identity['oai-authenticated-user-id'], 'fixture-owner');
+  assert.equal(results[0].identity['oai-authenticated-user-email'], 'fixture@example.test');
+  for (const result of results.slice(1)) assert.deepEqual(result.identity, {});
 });

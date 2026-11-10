@@ -6,9 +6,9 @@ import ts from 'typescript';
 
 const runtime = new URL('../.sites-runtime/scheduled-task-tests/', import.meta.url);
 await mkdir(runtime, { recursive: true });
-for (const name of ['models', 'schedule-time', 'scheduled-tasks']) {
+for (const name of ['authorization', 'models', 'schedule-time', 'scheduled-tasks']) {
   const source = (await readFile(new URL('../lib/' + name + '.ts', import.meta.url), 'utf8'))
-    .replaceAll("'./models'", "'./models.mjs'").replaceAll("'./schedule-time'", "'./schedule-time.mjs'");
+    .replaceAll("'./authorization'", "'./authorization.mjs'").replaceAll("'./models'", "'./models.mjs'").replaceAll("'./schedule-time'", "'./schedule-time.mjs'");
   await writeFile(new URL(name + '.mjs', runtime), ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText);
 }
 const { handleScheduledTasks, executeScheduledTask, runDueScheduledTasks } = await import(new URL('scheduled-tasks.mjs', runtime));

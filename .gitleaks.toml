@@ -1,0 +1,9 @@
+title = "GetOpenPrism secret scanning"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Documented boolean feature gate, never a credential"
+regexTarget = "secret"
+regexes = ['''^LAUNCH_APPROVED=true$''']
