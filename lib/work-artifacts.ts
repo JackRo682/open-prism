@@ -1,4 +1,5 @@
 import { BillingError } from './billing';
+import { safeDownloadName, attachmentDisposition, isOwnedObjectKey, PRIVATE_FILE_HEADERS } from './upload-security';
 
 type Artifact = {containerId:string;fileId:string;filename:string};
 export type StoredArtifact = {id:string;name:string;url:string};
@@ -8,6 +9,7 @@ export async function deleteWorkArtifacts(env:Cloudflare.Env,sql:D1Database,owne
  for(const id of ids){
   const file=await sql.prepare('SELECT object_key FROM work_artifacts WHERE id=? AND user_id=?').bind(id,owner).first<{object_key:string}>();
   if(!file)continue;
+  if(!isOwnedObjectKey(file.object_key,owner,'artifacts'))throw new BillingError('파일을 찾을 수 없습니다.',404);
   if(!env.BUCKET)throw new Error('생성 파일 저장 서비스를 사용할 수 없습니다.');
   await env.BUCKET.delete(file.object_key);
   await sql.prepare('DELETE FROM work_artifacts WHERE id=? AND user_id=?').bind(id,owner).run();
@@ -35,7 +37,7 @@ export async function storeWorkArtifacts(env:Cloudflare.Env,sql:D1Database,owner
    headers:{Authorization:'Bearer '+env.OPENAI_API_KEY},redirect:'error',signal});
   if(!response.ok)throw new Error('생성 파일을 저장하지 못했습니다. 내용을 대화에 표시하도록 다시 요청해주세요.');
   const bytes=await boundedBytes(response),id=crypto.randomUUID(),key=`${owner}/artifacts/${id}`;
-  const name=(file.filename.split(/[\\/]/).pop()||'result.bin').replace(/[\u0000-\u001f\u007f]/g,'').slice(0,150)||'result.bin';
+  const name=safeDownloadName(file.filename,'result.bin');
   const mimeType='application/octet-stream';
   await env.BUCKET.put(key,bytes,{httpMetadata:{contentType:mimeType}});
   try{
@@ -52,8 +54,8 @@ export async function handleWorkArtifact(req:Request,path:string[],sql:D1Databas
  if(path[0]!=='artifacts')return null;
  if(req.method!=='GET'||path.length!==2)return Response.json({error:'파일 경로를 찾을 수 없습니다.'},{status:404});
  const file=await sql.prepare('SELECT * FROM work_artifacts WHERE id=? AND user_id=?').bind(path[1],owner).first<{object_key:string;name:string;size:number}>();
- if(!file)throw new BillingError('파일을 찾을 수 없습니다.',404);
+ if(!file||!isOwnedObjectKey(file.object_key,owner,'artifacts'))throw new BillingError('파일을 찾을 수 없습니다.',404);
  const object=await env.BUCKET?.get(file.object_key);if(!object)throw new BillingError('파일 내용을 찾을 수 없습니다.',404);
- return new Response(object.body,{headers:{'Content-Type':'application/octet-stream','Content-Length':String(file.size),'X-Content-Type-Options':'nosniff','Cache-Control':'private, no-store',
-  'Content-Disposition':"attachment; filename*=UTF-8''"+encodeURIComponent(file.name).replace(/['()*]/g,c=>'%'+c.charCodeAt(0).toString(16))}});
+ return new Response(object.body,{headers:{...PRIVATE_FILE_HEADERS,'Content-Type':'application/octet-stream','Content-Length':String(file.size),
+  'Content-Disposition':attachmentDisposition(file.name)}});
 }

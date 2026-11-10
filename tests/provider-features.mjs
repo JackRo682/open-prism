@@ -5,10 +5,11 @@ import ts from 'typescript';
 
 const directory = new URL('../.sites-runtime/provider-feature-tests/', import.meta.url);
 await mkdir(directory, { recursive: true });
-for (const name of ['models', 'provider', 'workspace-tools', 'media-provider']) {
+for (const name of ['models', 'provider', 'workspace-tools', 'media-provider', 'upload-security']) {
   const source = (await readFile(new URL(`../lib/${name}.ts`, import.meta.url), 'utf8'))
     .replaceAll("'./models'", "'./models.mjs'")
-    .replaceAll("'./workspace-tools'", "'./workspace-tools.mjs'");
+    .replaceAll("'./workspace-tools'", "'./workspace-tools.mjs'")
+    .replaceAll("'./upload-security'", "'./upload-security.mjs'");
   await writeFile(new URL(name + '.mjs', directory), ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText);
 }
 const { MODELS } = await import(new URL('models.mjs', directory).href);
@@ -18,7 +19,7 @@ const { generateImage, generateMusic, createVideo, pollVideo, downloadVideo, ref
 const originalFetch = globalThis.fetch;
 after(() => { globalThis.fetch = originalFetch; });
 const signal = () => new AbortController().signal;
-const png = new Uint8Array(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aH1sAAAAASUVORK5CYII=', 'base64'));
+const png = new Uint8Array(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=', 'base64'));
 const mp4 = new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112, 105, 115, 111, 109, 0, 0, 0, 0]);
 const mp3 = new Uint8Array([73, 68, 51, 4, 0, 0, 0, 0, 0, 0]);
 const encode = bytes => Buffer.from(bytes).toString('base64');

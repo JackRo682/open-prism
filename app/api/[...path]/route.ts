@@ -12,6 +12,9 @@ import { handleScheduledTasks, runDueScheduledTasks, type ScheduledTaskExecutor 
 import { deleteWorkArtifacts, handleWorkArtifact, storeWorkArtifacts } from '../../../lib/work-artifacts';
 import { handleGuest } from '../../../lib/guest-chat';
 import { GuestImportError, importGuestConversation } from '../../../lib/guest-import';
+import { allowAccountMutation, boundedApiRequest, RequestSecurityError } from '../../../lib/request-security';
+import { allowAccountRead, allowPublicRead, checkReadiness } from '../../../lib/api-resource-guards';
+import { readTextUpload, safeDownloadName, attachmentDisposition, isOwnedObjectKey, MAX_TEXT_FILE_BYTES, PRIVATE_FILE_HEADERS } from '../../../lib/upload-security';
 export const dynamic='force-dynamic';
 const json=(data:unknown,status=200)=>Response.json(data,{status,headers:{'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
 const uid=()=>crypto.randomUUID();
@@ -45,11 +48,9 @@ async function handle(req:Request,scheduledOwner?:string){
  }
  if(path.join('/')==='health/live'&&req.method==='GET')return json({status:'ok',service:'open-prism'});
  if(path.join('/')==='health/ready'&&req.method==='GET'){
-  try{await db().batch(['usage','scheduled_tasks','media_assets','browser_sessions','work_artifacts'].map(table=>db().prepare(`SELECT id FROM ${table} LIMIT 1`)));}catch{return json({status:'unavailable',code:'DATABASE_NOT_READY'},503);}
-  if(!env.BUCKET)return json({status:'unavailable',code:'STORAGE_NOT_READY'},503);
-  if(!env.OPENAI_API_KEY)return json({status:'unavailable',code:'PROVIDER_NOT_READY'},503);
-  return json({status:'ready',service:'open-prism'});
+  const ready=await checkReadiness(env);return json(ready,ready.status==='ready'?200:503);
  }
+ if(env.DB&&!await allowPublicRead(env.DB,req))return json({error:'Too many requests. Try again shortly.',code:'PUBLIC_READ_RATE_LIMIT'},429);
  if(path.join('/')==='payments/webhook'&&req.method==='POST')return json(await paymentWebhook(req,db()));
  if(path[0]==='public-shares'&&path.length===2&&req.method==='GET'){
   if(!/^[a-f0-9]{64}$/.test(path[1]))return json({error:'Shared conversation not found.'},404);
@@ -62,10 +63,12 @@ async function handle(req:Request,scheduledOwner?:string){
   return await handleGuest(req,path,env.DB,env) ?? json({error:'Endpoint not found.'},404);
  }
  const user=await getChatGPTUser();
- if(path[0]==='bootstrap'&&req.method==='GET')return json({user:user?{name:user.fullName||user.email.split('@')[0],email:user.email}:null,beta:env.BETA_MODE==='true',models:env.BETA_MODE==='true'?MODELS.filter(m=>m.id==='gpt-6.1-sol'):MODELS,providers:Object.fromEntries(Object.entries(PROVIDERS).map(([p,v])=>[p,{configured:!!env[v.secret as keyof typeof env]}])),mediaModels:{image:env.OPENAI_IMAGE_MODEL||'gpt-image-2.5-flare',video:env.GEMINI_VIDEO_MODEL||'gemini-omni-1.1-flash',music:env.GEMINI_MUSIC_MODEL||'lyria-3-clip-preview'},capabilities:{...getWorkspaceCapabilities(env),drive:!!(env.GOOGLE_DRIVE_CLIENT_ID&&env.GOOGLE_DRIVE_PICKER_KEY&&env.GOOGLE_DRIVE_APP_ID),remoteBrowser:!!env.BROWSERLESS_API_TOKEN,scheduled:runnerReady(),codeExecution:env.BETA_MODE==='true'&&!!env.OPENAI_API_KEY&&env.WORK_CODE_EXECUTION_ENABLED!=='false'},isAdmin:!!user&&!!env.ADMIN_USER_ID&&user.userId===env.ADMIN_USER_ID});
+ if(path[0]==='bootstrap'&&req.method==='GET')return json({user:user?{name:user.fullName||user.email.split('@')[0],email:user.email}:null,beta:env.BETA_MODE==='true',models:env.BETA_MODE==='true'?MODELS.filter(m=>m.id==='gpt-6.1-sol'):MODELS,providers:Object.fromEntries(Object.entries(PROVIDERS).map(([p,v])=>[p,{configured:!!env[v.secret as keyof typeof env]}])),mediaModels:{image:env.OPENAI_IMAGE_MODEL||'gpt-image-2.5-flare',video:env.GEMINI_VIDEO_MODEL||'gemini-omni-1.1-flash',music:env.GEMINI_MUSIC_MODEL||'lyria-3-clip-preview'},capabilities:{...getWorkspaceCapabilities(env),drive:!!(env.GOOGLE_DRIVE_CLIENT_ID&&env.GOOGLE_DRIVE_PICKER_KEY&&env.GOOGLE_DRIVE_APP_ID),remoteBrowser:!!env.BROWSERLESS_API_TOKEN&&env.BROWSERLESS_EGRESS_POLICY_VERIFIED==='true',scheduled:runnerReady(),codeExecution:env.BETA_MODE==='true'&&!!env.OPENAI_API_KEY&&env.WORK_CODE_EXECUTION_ENABLED!=='false'},isAdmin:!!user&&!!env.ADMIN_USER_ID&&user.userId===env.ADMIN_USER_ID});
  if(!user&&!scheduledOwner)return json({error:'메시지를 보내고 작업을 저장하려면 ChatGPT로 로그인해주세요.',code:'SIGN_IN_REQUIRED'},401);
  if(req.method!=='GET'&&!mutationAllowed(req))return json({error:'Invalid request origin.'},403);
  const owner=scheduledOwner||user!.userId,sql=db();
+ if(!scheduledOwner&&!await allowAccountRead(sql,owner,req))return json({error:'Too many requests. Wait a minute and try again.',code:'ACCOUNT_READ_RATE_LIMIT'},429);
+ if(!scheduledOwner&&!['GET','HEAD','OPTIONS'].includes(req.method)&&!await allowAccountMutation(sql,owner))return json({error:'Too many requests. Wait a minute and try again.',code:'ACCOUNT_RATE_LIMIT'},429);
  if(path.join('/')==='integrations/drive'&&req.method==='GET'){
   const configured=!!(env.GOOGLE_DRIVE_CLIENT_ID&&env.GOOGLE_DRIVE_PICKER_KEY&&env.GOOGLE_DRIVE_APP_ID);
   return json(configured?{configured,clientId:env.GOOGLE_DRIVE_CLIENT_ID,developerKey:env.GOOGLE_DRIVE_PICKER_KEY,appId:env.GOOGLE_DRIVE_APP_ID}:{configured:false});
@@ -138,6 +141,7 @@ async function handle(req:Request,scheduledOwner?:string){
   if(await sql.prepare("SELECT id FROM usage WHERE user_id=? AND status='pending'").bind(owner).first())return json({error:'진행 중인 응답이 끝난 뒤 삭제해주세요.'},409);
   if(await sql.prepare('SELECT id FROM scheduled_tasks WHERE user_id=? AND run_token IS NOT NULL AND locked_until>?').bind(owner,Date.now()).first())return json({error:'진행 중인 예약 작업이 끝난 뒤 삭제해주세요.'},409);
   const owned=(await sql.prepare("SELECT key FROM files WHERE user_id=? UNION ALL SELECT object_key AS key FROM media_assets WHERE user_id=? AND object_key IS NOT NULL UNION ALL SELECT object_key AS key FROM work_artifacts WHERE user_id=?").bind(owner,owner,owner).all<{key:string}>()).results;
+  if(owned.some(file=>!isOwnedObjectKey(file.key,owner)))return json({error:'File storage metadata could not be verified.'},409);
   for(const file of owned)await env.BUCKET?.delete(file.key);
   await sql.batch([sql.prepare('DELETE FROM work_artifacts WHERE user_id=?').bind(owner),sql.prepare('DELETE FROM scheduled_tasks WHERE user_id=?').bind(owner),sql.prepare('DELETE FROM browser_sessions WHERE user_id=?').bind(owner),sql.prepare('DELETE FROM media_assets WHERE user_id=?').bind(owner),sql.prepare('DELETE FROM public_shares WHERE user_id=?').bind(owner),sql.prepare('DELETE FROM workspace_settings WHERE user_id=?').bind(owner),sql.prepare('DELETE FROM files WHERE user_id=?').bind(owner),sql.prepare('DELETE FROM messages WHERE conversation_id IN (SELECT id FROM conversations WHERE user_id=?)').bind(owner),sql.prepare('DELETE FROM conversations WHERE user_id=?').bind(owner)]);
   return json({ok:true,message:'대화와 파일을 삭제했습니다. 결제·사용량 원장은 정산을 위해 보존됩니다. ChatGPT 계정은 삭제되지 않습니다.'});
@@ -164,20 +168,23 @@ async function handle(req:Request,scheduledOwner?:string){
  }
  if(path[0]==='files'){
   if(req.method==='GET'&&!path[1])return json((await sql.prepare('SELECT id,name,size,type,created_at FROM files WHERE user_id=? ORDER BY created_at DESC').bind(owner).all()).results);
-  if(req.method==='POST'){
+  if(req.method==='POST'&&path.length===1){
    if(Number(req.headers.get('content-length')||0)>150000)return json({error:'File must be smaller than 128 KB.'},413);
-   const form=await req.formData(),file=form.get('file');if(!(file instanceof File))return json({error:'Choose a text file.'},400);
-   if(file.size>131072||! /\.(txt|md|csv|json|ts|tsx|js|jsx|py|html|css|xml|yaml|yml|sql)$/i.test(file.name))return json({error:'Upload text, Markdown, CSV, JSON, or source code up to 128 KB.'},400);
+   const form=await req.formData(),file=form.get('file');if(!(file instanceof File)||form.getAll('file').length!==1)return json({error:'Choose one text file.'},400);
+   if(file.size>MAX_TEXT_FILE_BYTES||file.size<1)return json({error:'Upload text, Markdown, CSV, JSON, or source code up to 128 KB.'},400);
    if(!env.BUCKET)return json({error:'File storage is not configured.'},503);
-   const count:any=await sql.prepare('SELECT COUNT(*) AS n FROM files WHERE user_id=?').bind(owner).first();if(count.n>=100)return json({error:'Your workspace supports up to 100 files. Remove a file first.'},400);
-   const text=await file.text();if(text.includes('\u0000'))return json({error:'Only plain text files are supported.'},400);
-   const id=uid(),key=owner+'/'+id;await env.BUCKET.put(key,text,{httpMetadata:{contentType:'text/plain; charset=utf-8'}});
-   try{await sql.prepare('INSERT INTO files (id,user_id,name,key,size,type,created_at) VALUES (?,?,?,?,?,?,?)').bind(id,owner,file.name.slice(0,150),key,file.size,'text/plain',Date.now()).run();}catch(e){await env.BUCKET.delete(key);throw e;}
-   return json({id,name:file.name,size:file.size});
+   const text=readTextUpload(new Uint8Array(await file.arrayBuffer()),file.name);if(text===null)return json({error:'Upload a UTF-8 text file with a supported extension and a plain filename.'},400);
+   if(req.signal.aborted)return json({error:'The upload was cancelled.'},408);
+   const id=uid(),key=owner+'/'+id,name=safeDownloadName(file.name);await env.BUCKET.put(key,text,{httpMetadata:{contentType:'text/plain; charset=utf-8'}});
+   try{
+    const created=await sql.prepare('INSERT INTO files (id,user_id,name,key,size,type,created_at) SELECT ?,?,?,?,?,?,? WHERE (SELECT COUNT(*) FROM files WHERE user_id=?)<100 RETURNING id').bind(id,owner,name,key,file.size,'text/plain',Date.now(),owner).first();
+    if(!created){await env.BUCKET.delete(key);return json({error:'Your workspace supports up to 100 files. Remove a file first.'},400);}
+   }catch(e){await env.BUCKET.delete(key);throw e;}
+   return json({id,name,size:file.size});
   }
-  if(path[1]){const file:any=await sql.prepare('SELECT * FROM files WHERE id=? AND user_id=?').bind(path[1],owner).first();if(!file)return json({error:'File not found.'},404);
+  if(path.length===2){const file:any=await sql.prepare('SELECT * FROM files WHERE id=? AND user_id=?').bind(path[1],owner).first();if(!file||!isOwnedObjectKey(file.key,owner))return json({error:'File not found.'},404);
    if(req.method==='DELETE'){if(env.BUCKET)await env.BUCKET.delete(file.key);await sql.prepare('DELETE FROM files WHERE id=? AND user_id=?').bind(path[1],owner).run();return json({ok:true});}
-   if(req.method==='GET'){const object=await env.BUCKET?.get(file.key);if(!object)return json({error:'File content not found.'},404);return new Response(await object.text(),{headers:{'Content-Type':'text/plain; charset=utf-8','X-Content-Type-Options':'nosniff','Cache-Control':'private, no-store'}});}
+   if(req.method==='GET'){const object=await env.BUCKET?.get(file.key);if(!object)return json({error:'File content not found.'},404);if(object.size>MAX_TEXT_FILE_BYTES)return json({error:'Stored file exceeds the supported size.'},413);return new Response(await object.text(),{headers:{...PRIVATE_FILE_HEADERS,'Content-Type':'text/plain; charset=utf-8','Content-Disposition':attachmentDisposition(file.name)}});}
   }
  }
  if(path[0]==='admin'&&req.method==='GET'){
@@ -216,7 +223,7 @@ async function handle(req:Request,scheduledOwner?:string){
   const lock=await sql.prepare('INSERT INTO rate_limits (key,count,expires_at) VALUES (?,1,?) ON CONFLICT(key) DO UPDATE SET count=1,expires_at=excluded.expires_at WHERE expires_at<? RETURNING key').bind(lockKey,now+250000,now).first();if(!lock)return json({error:'This conversation already has a response in progress.'},409);
   let prompt=body.prompt.trim(),reservation=0,requestId=uid(),providerStarted=false;
   try{
-   for(const id of body.fileIds||[]){const file:any=await sql.prepare('SELECT * FROM files WHERE id=? AND user_id=?').bind(id,owner).first();if(!file)throw new Error('An attached file is no longer available.');const object=await env.BUCKET?.get(file.key);if(!object)throw new Error('An attached file could not be read.');prompt+='\n\n<attached_document name='+JSON.stringify(file.name)+'>\n'+await object.text()+'\n</attached_document>';}
+   for(const id of body.fileIds||[]){const file:any=await sql.prepare('SELECT * FROM files WHERE id=? AND user_id=?').bind(id,owner).first();if(!file||!isOwnedObjectKey(file.key,owner))throw new Error('An attached file is no longer available.');const object=await env.BUCKET?.get(file.key);if(!object||object.size>MAX_TEXT_FILE_BYTES)throw new Error('An attached file could not be read.');prompt+='\n\n<attached_document name='+JSON.stringify(file.name)+'>\n'+await object.text()+'\n</attached_document>';}
    const historyRows=(await sql.prepare('SELECT role,content,created_at FROM messages WHERE conversation_id=? ORDER BY created_at DESC,rowid DESC LIMIT 40').bind(conversationId).all<Turn & {created_at:number}>()).results.reverse();
    const history:Turn[]=historyRows.map(({role,content})=>({role,content}));
    // The conversation lock serializes turns. Keep timestamps strictly increasing
@@ -275,14 +282,8 @@ async function handle(req:Request,scheduledOwner?:string){
  return json({error:'Endpoint not found.'},404);
 }
 async function dispatch(req:Request){try{
- if(req.method!=='GET'&&req.body){
-  const requestPath=new URL(req.url).pathname;
-  const maxBytes=requestPath==='/api/media/reference'?4*1024*1024+16384:req.method==='PATCH'&&requestPath==='/api/settings'?600000:200000;
-  const reader=req.clone().body!.getReader();let bytes=0;
-  while(true){const part=await reader.read();if(part.done)break;bytes+=part.value.byteLength;if(bytes>maxBytes){void reader.cancel();return json({error:'Request is too large.'},413);}}
- }
- return await handle(req);
-}catch(e){if(e instanceof GuestImportError)return json({error:e.message,code:'INVALID_GUEST_IMPORT'},e.status);if(e instanceof WorkspaceToolError)return json({error:e.message,code:e.code},e.status);if(e instanceof BillingError)return json({error:e.message},e.status);if(e instanceof SyntaxError)return json({error:'Invalid JSON request.'},400);return json({error:'The request could not be completed. Please retry.'},500);}}
+ return await handle(await boundedApiRequest(req));
+}catch(e){if(e instanceof RequestSecurityError)return json({error:e.message,code:e.code},e.status);if(e instanceof GuestImportError)return json({error:e.message,code:'INVALID_GUEST_IMPORT'},e.status);if(e instanceof WorkspaceToolError)return json({error:e.message,code:e.code},e.status);if(e instanceof BillingError)return json({error:e.message},e.status);if(e instanceof SyntaxError)return json({error:'Invalid JSON request.'},400);return json({error:'The request could not be completed. Please retry.'},500);}}
 async function safe(req:Request){
  const requestId=uid(),started=Date.now();
  const response=await dispatch(req);

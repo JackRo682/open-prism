@@ -1,4 +1,5 @@
 import { WorkspaceToolError, type WorkspaceEnvironment } from './workspace-tools';
+import { inspectImageStructure, validPngRaster } from './upload-security';
 
 export const DEFAULT_IMAGE_MODEL = 'gpt-image-2.5-flare';
 export const DEFAULT_VIDEO_MODEL = 'gemini-omni-1.1-flash';
@@ -50,40 +51,12 @@ function providerKey(env: WorkspaceEnvironment, kind: MediaKind): string {
 
 const ascii = (bytes: Uint8Array, at: number, length: number) => String.fromCharCode(...bytes.subarray(at, at + length));
 
-/** Read dimensions before accepting compressed images, so tiny files cannot hide huge pixel counts. */
+/** Validate the complete container before trusting its declared dimensions. */
 export function referenceDimensions(bytes: Uint8Array, mime: string): { width: number; height: number } | null {
-  if (mime === 'image/png' && bytes.length >= 33 && [137, 80, 78, 71, 13, 10, 26, 10].every((value, index) => bytes[index] === value) && ascii(bytes, 12, 4) === 'IHDR') {
-    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-    return { width: view.getUint32(16), height: view.getUint32(20) };
-  }
-  if (mime === 'image/jpeg' && bytes[0] === 255 && bytes[1] === 216) {
-    let offset = 2;
-    while (offset + 4 <= bytes.length) {
-      if (bytes[offset] !== 255) return null;
-      while (bytes[offset] === 255) offset++;
-      const marker = bytes[offset++];
-      if (marker === 217 || marker === 218) break;
-      if (marker === 1 || (marker >= 208 && marker <= 215)) continue;
-      if (offset + 2 > bytes.length) return null;
-      const length = bytes[offset] * 256 + bytes[offset + 1];
-      if (length < 2 || offset + length > bytes.length) return null;
-      if ([192, 193, 194, 195, 197, 198, 199, 201, 202, 203, 205, 206, 207].includes(marker)) {
-        if (length < 7) return null;
-        return { height: bytes[offset + 3] * 256 + bytes[offset + 4], width: bytes[offset + 5] * 256 + bytes[offset + 6] };
-      }
-      offset += length;
-    }
-  }
-  if (mime === 'image/webp' && bytes.length >= 30 && ascii(bytes, 0, 4) === 'RIFF' && ascii(bytes, 8, 4) === 'WEBP') {
-    const kind = ascii(bytes, 12, 4);
-    if (kind === 'VP8X') return { width: 1 + bytes[24] + (bytes[25] << 8) + (bytes[26] << 16), height: 1 + bytes[27] + (bytes[28] << 8) + (bytes[29] << 16) };
-    if (kind === 'VP8L' && bytes[20] === 47) return { width: 1 + bytes[21] + ((bytes[22] & 63) << 8), height: 1 + (bytes[22] >> 6) + (bytes[23] << 2) + ((bytes[24] & 15) << 10) };
-    if (kind === 'VP8 ' && bytes[23] === 157 && bytes[24] === 1 && bytes[25] === 42) return { width: (bytes[26] + (bytes[27] << 8)) & 16383, height: (bytes[28] + (bytes[29] << 8)) & 16383 };
-  }
-  return null;
+  return inspectImageStructure(bytes, mime);
 }
 
-export function validateMediaInput(input: MediaInput) {
+export async function validateMediaInput(input: MediaInput) {
   if (typeof input.prompt !== 'string' || !input.prompt.trim() || input.prompt.length > 2000) throw new WorkspaceToolError('생성할 내용을 1~2,000자로 입력해주세요.', 400, 'INVALID_MEDIA_PROMPT');
   if (input.aspect !== undefined && !['16:9', '9:16'].includes(input.aspect)) throw new WorkspaceToolError('올바른 동영상 화면 비율을 선택해주세요.', 400, 'INVALID_VIDEO_ASPECT');
   if (input.safetyIdentifier !== undefined && !/^[a-zA-Z0-9_-]{1,128}$/.test(input.safetyIdentifier)) throw new WorkspaceToolError('요청 식별자가 올바르지 않습니다.', 400, 'INVALID_SAFETY_IDENTIFIER');
@@ -91,7 +64,8 @@ export function validateMediaInput(input: MediaInput) {
     const { bytes, mimeType } = input.reference;
     if (!(bytes instanceof Uint8Array) || !bytes.byteLength || bytes.byteLength > MAX_REFERENCE_BYTES) throw new WorkspaceToolError('참조 이미지는 4MB 이하로 업로드해주세요.', 400, 'INVALID_REFERENCE_IMAGE');
     const dimensions = referenceDimensions(bytes, mimeType);
-    if (!dimensions || dimensions.width < 1 || dimensions.height < 1 || dimensions.width > 2048 || dimensions.height > 2048) throw new WorkspaceToolError('참조 이미지는 가로·세로 각각 2,048px 이하의 PNG, JPEG, WebP 파일이어야 합니다.', 400, 'INVALID_REFERENCE_IMAGE');
+    if (!dimensions || dimensions.width < 1 || dimensions.height < 1 || dimensions.width > 2048 || dimensions.height > 2048
+      || mimeType === 'image/png' && !await validPngRaster(bytes, 2048)) throw new WorkspaceToolError('참조 이미지는 가로·세로 각각 2,048px 이하의 PNG, JPEG, WebP 파일이어야 합니다.', 400, 'INVALID_REFERENCE_IMAGE');
   }
 }
 
@@ -109,8 +83,9 @@ function decodeMedia(value: unknown): Uint8Array {
   return Uint8Array.from(binary, char => char.charCodeAt(0));
 }
 
-function checkAsset(bytes: Uint8Array, mime: string) {
-  const valid = mime === 'image/png' ? !!referenceDimensions(bytes, mime)
+async function checkAsset(bytes: Uint8Array, mime: string) {
+  const dimensions = mime === 'image/png' ? referenceDimensions(bytes, mime) : null;
+  const valid = mime === 'image/png' ? !!dimensions && dimensions.width > 0 && dimensions.height > 0 && dimensions.width <= 4096 && dimensions.height <= 4096 && await validPngRaster(bytes, 4096)
     : mime === 'video/mp4' ? bytes.length >= 12 && ascii(bytes, 4, 4) === 'ftyp'
       : mime === 'audio/mpeg' ? (bytes.length >= 3 && ascii(bytes, 0, 3) === 'ID3') || (bytes.length >= 2 && bytes[0] === 255 && (bytes[1] & 224) === 224) : false;
   if (!valid) throw new WorkspaceToolError('생성 서비스에서 예상한 파일 형식을 반환하지 않았습니다.', 502, 'INVALID_MEDIA_OUTPUT');
@@ -172,7 +147,7 @@ function usageFrom(data: Record<string, any>): MediaUsage | undefined {
 
 export async function generateImage(env: WorkspaceEnvironment, input: MediaInput, signal: AbortSignal): Promise<MediaAsset> {
   const key = providerKey(env, 'image'), model = mediaModel(env, 'image');
-  validateMediaInput(input);
+  await validateMediaInput(input);
   const body: Record<string, unknown> = { model, prompt: input.prompt.trim(), n: 1, size: '1024x1024', quality: 'low', output_format: 'png', ...(input.safetyIdentifier ? { safety_identifier: input.safetyIdentifier } : {}) };
   if (input.reference) body.images = [{ image_url: `data:${input.reference.mimeType};base64,${base64(input.reference.bytes)}` }];
   const response = await fetch(`https://api.openai.com/v1/images/${input.reference ? 'edits' : 'generations'}`, {
@@ -181,7 +156,7 @@ export async function generateImage(env: WorkspaceEnvironment, input: MediaInput
   const data = await providerJson(response);
   if (!Array.isArray(data.data) || data.data.length !== 1) throw new WorkspaceToolError('생성된 이미지를 찾을 수 없습니다.', 502, 'INVALID_MEDIA_OUTPUT');
   const bytes = decodeMedia(data.data[0]?.b64_json);
-  checkAsset(bytes, 'image/png');
+  await checkAsset(bytes, 'image/png');
   return { bytes, mimeType: 'image/png', model, usage: usageFrom(data), ...(typeof data.data[0]?.revised_prompt === 'string' ? { revisedPrompt: data.data[0].revised_prompt.slice(0, 32000) } : {}) };
 }
 
@@ -213,7 +188,7 @@ function googleFileName(value: unknown): string {
 
 export async function createVideo(env: WorkspaceEnvironment, input: MediaInput, signal: AbortSignal): Promise<VideoResult> {
   const key = providerKey(env, 'video'), model = mediaModel(env, 'video');
-  validateMediaInput(input);
+  await validateMediaInput(input);
   const data = await providerJson(await fetch('https://generativelanguage.googleapis.com/v1beta/interactions', {
     method: 'POST', headers: googleHeaders(key), signal, redirect: 'error', body: JSON.stringify({
       model, input: googleInput(input), store: false, background: false, stream: false,
@@ -225,7 +200,7 @@ export async function createVideo(env: WorkspaceEnvironment, input: MediaInput, 
   const usage = usageFrom(data);
   if (typeof output.data === 'string' && output.data) {
     const bytes = decodeMedia(output.data);
-    checkAsset(bytes, 'video/mp4');
+    await checkAsset(bytes, 'video/mp4');
     return { status: 'completed', asset: { bytes, mimeType: 'video/mp4', model, usage } };
   }
   return { status: 'processing', job: { provider: 'google', model, fileName: googleFileName(output.uri), ...(typeof data.id === 'string' ? { interactionId: data.id } : {}), usage } };
@@ -262,13 +237,13 @@ export async function downloadVideo(env: WorkspaceEnvironment, job: VideoJob, si
   }
   if (!response!.ok) { await providerJson(response!); throw new WorkspaceToolError('동영상을 다운로드하지 못했습니다.', 502, 'VIDEO_DOWNLOAD_FAILED'); }
   const bytes = await readBounded(response!, MAX_MEDIA_BYTES);
-  checkAsset(bytes, 'video/mp4');
+  await checkAsset(bytes, 'video/mp4');
   return { bytes, mimeType: 'video/mp4', model: job.model, usage: job.usage };
 }
 
 export async function generateMusic(env: WorkspaceEnvironment, input: MediaInput, signal: AbortSignal): Promise<MediaAsset> {
   const key = providerKey(env, 'music'), model = mediaModel(env, 'music');
-  validateMediaInput(input);
+  await validateMediaInput(input);
   const data = await providerJson(await fetch('https://generativelanguage.googleapis.com/v1beta/interactions', {
     method: 'POST', headers: googleHeaders(key), signal, redirect: 'error',
     body: JSON.stringify({ model, input: googleInput(input), store: false, background: false, stream: false, response_format: { type: 'audio' } }),
@@ -276,7 +251,7 @@ export async function generateMusic(env: WorkspaceEnvironment, input: MediaInput
   const content = googleContent(data), output = content.find(part => part.type === 'audio');
   if (!output || (output.mime_type && !['audio/mpeg', 'audio/mp3'].includes(output.mime_type))) throw new WorkspaceToolError('생성 서비스에서 지원하는 음악 파일을 반환하지 않았습니다.', 502, 'EMPTY_MEDIA_OUTPUT');
   const bytes = decodeMedia(output.data);
-  checkAsset(bytes, 'audio/mpeg');
+  await checkAsset(bytes, 'audio/mpeg');
   const text = content.filter(part => part.type === 'text' && typeof part.text === 'string').map(part => part.text).join('\n').slice(0, 32000);
   return { bytes, mimeType: 'audio/mpeg', model, usage: usageFrom(data), ...(text ? { text } : {}) };
 }
