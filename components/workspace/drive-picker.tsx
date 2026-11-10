@@ -1,11 +1,13 @@
 'use client';
 
+import { clearDriveTokenResponse, DriveAccessSession, DRIVE_SCOPE, DRIVE_SELECTABLE_MIME_TYPES, selectedDriveFile, type DriveTokenResponse } from '../../lib/drive-client';
+
 import { useEffect, useRef, useState } from 'react';
 import { Dialog } from 'radix-ui';
 import { AlertCircle, ArrowRight, Cloud, LoaderCircle, X } from 'lucide-react';
 
 type DriveConfiguration = { configured: boolean; clientId?: string; developerKey?: string; appId?: string };
-type TokenResponse = { access_token?: string; expires_in?: number; error?: string; scope?: string };
+type TokenResponse = DriveTokenResponse;
 type PickerInstance = { setVisible(visible: boolean): void; dispose?(): void };
 type PickerView = { setMimeTypes(types: string): PickerView; setMode(mode: string): PickerView; setIncludeFolders(include: boolean): PickerView; setSelectFolderEnabled(enabled: boolean): PickerView };
 type PickerBuilder = {
@@ -27,17 +29,6 @@ type GoogleWindow = Window & {
   };
 };
 
-const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
-const MAX_FILE_BYTES = 131072;
-const googleExports: Record<string, { mime: string; extension: string }> = {
-  'application/vnd.google-apps.document': { mime: 'text/plain', extension: 'txt' },
-  'application/vnd.google-apps.spreadsheet': { mime: 'text/csv', extension: 'csv' },
-  'application/vnd.google-apps.presentation': { mime: 'text/plain', extension: 'txt' },
-};
-const selectableMimeTypes = [
-  ...Object.keys(googleExports), 'text/plain', 'text/markdown', 'text/csv', 'text/html', 'text/css',
-  'text/javascript', 'text/xml', 'application/json', 'application/xml', 'application/javascript',
-];
 const scriptLoads = new Map<string, Promise<void>>();
 
 /** Called only after the user opens the Drive picker. */
@@ -72,42 +63,6 @@ async function prepareGooglePicker() {
   if (!browser.google?.picker || !browser.google?.accounts?.oauth2) throw new Error('Google 연결 도구를 준비하지 못했습니다.');
 }
 
-async function selectedDriveFile(id: string, token: string, signal: AbortSignal): Promise<File> {
-  if (!/^[A-Za-z0-9_-]{1,256}$/.test(id)) throw new Error('선택한 Drive 파일을 확인할 수 없습니다.');
-  const endpoint = 'https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(id);
-  const headers = { Authorization: 'Bearer ' + token };
-  const metadata = await fetch(endpoint + '?fields=id,name,mimeType,size,capabilities(canDownload)&supportsAllDrives=true', { headers, signal, credentials: 'omit', cache: 'no-store' });
-  if (!metadata.ok) throw new Error(metadata.status === 401 ? 'Google 연결이 만료되었습니다. 다시 연결해 주세요.' : '선택한 파일을 읽을 권한이 없습니다. Google Drive 공유 설정을 확인해 주세요.');
-  const file = await metadata.json() as { id?: string; name?: string; mimeType?: string; size?: string; capabilities?: { canDownload?: boolean } };
-  if (file.capabilities?.canDownload !== true) throw new Error('소유자가 다운로드를 허용하지 않은 파일입니다.');
-  if (typeof file.name !== 'string' || typeof file.mimeType !== 'string') throw new Error('Drive 파일 정보를 읽지 못했습니다.');
-  const exportType = googleExports[file.mimeType];
-  if (!exportType && !selectableMimeTypes.includes(file.mimeType)) throw new Error('Google 문서, 스프레드시트, 프레젠테이션 또는 텍스트 파일을 선택해 주세요.');
-  if (!exportType && Number(file.size || 0) > MAX_FILE_BYTES) throw new Error('첨부 파일은 128KB 이하여야 합니다.');
-  const downloadUrl = exportType ? endpoint + '/export?mimeType=' + encodeURIComponent(exportType.mime) : endpoint + '?alt=media';
-  const response = await fetch(downloadUrl, { headers, signal, credentials: 'omit', cache: 'no-store' });
-  if (!response.ok || !response.body) throw new Error('선택한 파일을 가져오지 못했습니다. 다운로드 권한과 Google 연결을 확인해 주세요.');
-  if (Number(response.headers.get('Content-Length') || 0) > MAX_FILE_BYTES) { await response.body.cancel(); throw new Error('내보낸 문서가 128KB를 넘습니다. 문서를 나누어 첨부해 주세요.'); }
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder('utf-8', { fatal: true });
-  let size = 0, text = '';
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      size += value.byteLength;
-      if (size > MAX_FILE_BYTES) { await reader.cancel(); throw new Error('내보낸 문서가 128KB를 넘습니다. 문서를 나누어 첨부해 주세요.'); }
-      text += decoder.decode(value, { stream: true });
-    }
-    text += decoder.decode();
-  } finally { reader.releaseLock(); }
-  if (text.includes('\0')) throw new Error('텍스트로 읽을 수 있는 파일을 선택해 주세요.');
-  const baseName = file.name.replace(/[\u0000-\u001f\u007f/\\]/g, '_').slice(0, 130) || 'Drive 문서';
-  const name = exportType ? baseName + '.' + exportType.extension
-    : /\.(txt|md|csv|json|ts|tsx|js|jsx|py|html|css|xml|yaml|yml|sql)$/i.test(baseName) ? baseName : baseName + '.txt';
-  return new File([text], name, { type: exportType?.mime || 'text/plain', lastModified: Date.now() });
-}
-
 export function DrivePickerDialog({ open, onOpenChange, signedIn, onFile, onNavigate }: {
   open: boolean; onOpenChange(open: boolean): void; signedIn: boolean;
   onFile(file: File): Promise<void>; onNavigate(path: string): void;
@@ -121,15 +76,20 @@ export function DrivePickerDialog({ open, onOpenChange, signedIn, onFile, onNavi
   const mountedOpen = useRef(false);
   const pickerActive = useRef(false);
   const picker = useRef<PickerInstance | null>(null);
-  const token = useRef<{ value: string; expiresAt: number } | null>(null);
-  const transfer = useRef<AbortController | null>(null);
+  const selection = useRef<DriveAccessSession | null>(null);
   const upload = useRef(onFile); upload.current = onFile;
   const changeOpen = useRef(onOpenChange); changeOpen.current = onOpenChange;
 
   useEffect(() => {
-    mountedOpen.current = open;
+    mountedOpen.current = open && signedIn;
     if (!open || !signedIn) return;
     const controller = new AbortController();
+    const discardSelection = () => {
+      const session = selection.current; selection.current = null; session?.cancel();
+      disposePicker();
+      setPickerOpen(false); setBusy(false);
+    };
+    window.addEventListener('pagehide', discardSelection);
     setReady(false); setError(''); setConfig(null);
     fetch('/api/integrations/drive', { credentials: 'same-origin', signal: controller.signal })
       .then(async response => {
@@ -144,75 +104,98 @@ export function DrivePickerDialog({ open, onOpenChange, signedIn, onFile, onNavi
       }).catch(cause => { if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : 'Drive 연결을 준비하지 못했습니다.'); });
     return () => {
       mountedOpen.current = false;
-      controller.abort(); transfer.current?.abort();
-      token.current = null;
-      picker.current?.setVisible(false); picker.current?.dispose?.(); picker.current = null;
-      pickerActive.current = false;
-      setPickerOpen(false); setBusy(false);
+      controller.abort();
+      window.removeEventListener('pagehide', discardSelection);
+      discardSelection();
     };
   }, [open, signedIn, attempt]);
 
-  async function pickFile(id: string, accessToken: string) {
-    const controller = new AbortController(); transfer.current = controller;
-    setBusy(true); setError('');
-    try {
-      const file = await selectedDriveFile(id, accessToken, controller.signal);
-      if (controller.signal.aborted || !mountedOpen.current) return;
-      await upload.current(file);
-      if (!controller.signal.aborted && mountedOpen.current) changeOpen.current(false);
-    } catch (cause) {
-      token.current = null;
-      if (!controller.signal.aborted && mountedOpen.current) setError(cause instanceof Error ? cause.message : 'Drive 파일을 첨부하지 못했습니다.');
-    } finally { if (!controller.signal.aborted && mountedOpen.current) setBusy(false); }
+  function isCurrent(session: DriveAccessSession) { return mountedOpen.current && selection.current === session; }
+
+  function disposePicker() {
+    const instance = picker.current; picker.current = null; pickerActive.current = false;
+    // Drop the reference before disposal: SDK callbacks may be re-entrant.
+    try { instance?.setVisible(false); } catch { /* Continue clearing the picker. */ }
+    try { instance?.dispose?.(); } catch { /* Continue clearing the session. */ }
   }
 
-  function showPicker(accessToken: string) {
-    const api = (window as GoogleWindow).google?.picker;
-    if (!mountedOpen.current) return;
-    if (!api || !config?.developerKey || !config.appId) { setBusy(false); setError('Google 파일 선택기를 준비하지 못했습니다. 다시 연결해 주세요.'); return; }
+  function finishSelection(session: DriveAccessSession) {
+    if (selection.current !== session) { session.cancel(); return; }
+    selection.current = null; session.cancel(); disposePicker();
+    if (mountedOpen.current) { setPickerOpen(false); setBusy(false); }
+  }
+
+  async function pickFile(id: string, session: DriveAccessSession) {
+    setBusy(true); setError('');
     try {
-    const view = new api.DocsView(api.ViewId.DOCS).setMimeTypes(selectableMimeTypes.join(','))
+      const file = await selectedDriveFile(id, session);
+      if (session.signal.aborted || !isCurrent(session)) return;
+      // selectedDriveFile has already discarded the Google token here.
+      await upload.current(file);
+      if (!session.signal.aborted && isCurrent(session)) changeOpen.current(false);
+    } catch (cause) {
+      if (!session.signal.aborted && isCurrent(session)) setError(cause instanceof Error ? cause.message : 'Drive 파일을 첨부하지 못했습니다.');
+    } finally { finishSelection(session); }
+  }
+
+  function showPicker(session: DriveAccessSession) {
+    const api = (window as GoogleWindow).google?.picker;
+    if (!isCurrent(session)) { session.cancel(); return; }
+    if (!api || !config?.developerKey || !config.appId) { finishSelection(session); setError('Google 파일 선택기를 준비하지 못했습니다. 다시 연결해 주세요.'); return; }
+    try {
+    const view = new api.DocsView(api.ViewId.DOCS).setMimeTypes(DRIVE_SELECTABLE_MIME_TYPES.join(','))
       .setMode(api.DocsViewMode.LIST).setIncludeFolders(true).setSelectFolderEnabled(false);
-    const instance = new api.PickerBuilder().addView(view).setOAuthToken(accessToken)
+    let settled = false;
+    let instance: PickerInstance | null = null;
+    instance = new api.PickerBuilder().addView(view).setOAuthToken(session.tokenForPicker())
       .setDeveloperKey(config.developerKey).setAppId(config.appId).setOrigin(window.location.origin).setLocale('ko')
       .setSize(Math.max(280, Math.min(1000, window.innerWidth - 24)), Math.max(240, Math.min(700, window.innerHeight - 32)))
       .setCallback(data => {
-        if (data.action !== api.Action.PICKED && data.action !== api.Action.CANCEL) return;
-        picker.current?.setVisible(false); picker.current?.dispose?.(); picker.current = null;
-        pickerActive.current = false; setPickerOpen(false); setBusy(false);
-        if (data.action === api.Action.PICKED && data.docs?.[0]?.id) void pickFile(data.docs[0].id, accessToken);
+        if (settled || !instance || !isCurrent(session) || picker.current !== instance || (data.action !== api.Action.PICKED && data.action !== api.Action.CANCEL)) return;
+        settled = true; disposePicker(); setPickerOpen(false);
+        if (data.action === api.Action.PICKED && data.docs?.[0]?.id) void pickFile(data.docs[0].id, session);
+        else finishSelection(session);
       }).build();
     picker.current = instance; pickerActive.current = true; setPickerOpen(true); setBusy(false);
     instance.setVisible(true);
     } catch {
-      picker.current = null; pickerActive.current = false; setPickerOpen(false); setBusy(false);
+      finishSelection(session);
       setError('Google 파일 선택기를 열지 못했습니다. 연결 설정을 확인하고 다시 시도해 주세요.');
     }
   }
 
   function connect() {
-    if (!ready || busy || !config?.clientId) return;
+    if (!ready || busy || !mountedOpen.current || selection.current || !config?.clientId) return;
     const oauth = (window as GoogleWindow).google?.accounts?.oauth2;
     if (!oauth) return;
     setError('');
-    if (token.current && token.current.expiresAt > Date.now()) { showPicker(token.current.value); return; }
+    const session = new DriveAccessSession(); selection.current = session;
+    session.signal.addEventListener('abort', () => {
+      if (!isCurrent(session)) return;
+      const reason = session.signal.reason;
+      finishSelection(session);
+      if (reason instanceof Error && reason.name === 'TimeoutError') setError(reason.message);
+    }, { once: true });
     setBusy(true);
     try {
     const client = oauth.initTokenClient({
       client_id: config.clientId, scope: DRIVE_SCOPE, include_granted_scopes: false,
       callback: response => {
-        if (!mountedOpen.current) return;
-        if (response.error || !response.access_token || !oauth.hasGrantedAllScopes(response, DRIVE_SCOPE)) {
-          setBusy(false); setError('Drive에서 선택한 파일을 읽으려면 Google 계정의 파일 접근 동의가 필요합니다.'); return;
+        try {
+          if (!isCurrent(session) || !session.awaitingAuthorization) return;
+          if (!oauth.hasGrantedAllScopes(response, DRIVE_SCOPE)) throw new Error('Drive에서 선택한 파일을 읽으려면 Google 계정의 파일 접근 동의가 필요합니다.');
+          if (session.acceptToken(response)) showPicker(session);
+        } catch (cause) {
+          if (isCurrent(session)) { finishSelection(session); setError(cause instanceof Error ? cause.message : 'Google 연결을 확인하지 못했습니다.'); }
+        } finally {
+          clearDriveTokenResponse(response);
         }
-        token.current = { value: response.access_token, expiresAt: Date.now() + Math.max(0, (Number(response.expires_in) || 300) - 30) * 1000 };
-        showPicker(response.access_token);
       },
-      error_callback: cause => { if (mountedOpen.current) { setBusy(false); setError(cause.type === 'popup_closed' ? 'Google 연결 창을 닫았습니다. 다시 연결할 수 있습니다.' : 'Google 연결 창을 열지 못했습니다. 이 사이트의 팝업을 허용하고 다시 시도해 주세요.'); } },
+      error_callback: cause => { if (isCurrent(session) && session.awaitingAuthorization) { finishSelection(session); setError(cause.type === 'popup_closed' ? 'Google 연결 창을 닫았습니다. 다시 연결할 수 있습니다.' : 'Google 연결 창을 열지 못했습니다. 이 사이트의 팝업을 허용하고 다시 시도해 주세요.'); } },
     });
     client.requestAccessToken({ prompt: 'consent' });
     } catch {
-      setBusy(false); setError('Google 연결 창을 열지 못했습니다. 연결 설정과 팝업 권한을 확인해 주세요.');
+      finishSelection(session); setError('Google 연결 창을 열지 못했습니다. 연결 설정과 팝업 권한을 확인해 주세요.');
     }
   }
 

@@ -17,7 +17,7 @@ The November 2026 audit fixes add service adapters and correct the composer, nav
 | Video | Reference images, aspect ratio, provider job polling, private playback, and range downloads. | Google Gemini access **and an approved media budget change**; the default beta cap blocks video. |
 | Music | Dedicated prompt/result page, real audio generation, playback, and downloads. | Google Gemini/Lyria access, beta mode, and the full current daily media allowance. |
 | Scheduled tasks | Create/edit/delete, once/daily/weekly recurrence, time zones, manual execution, result links, and authenticated due-task runner. | Manual runs use normal model limits; automatic runs require a configured external scheduler and runner credential. |
-| Browser | Saved preferences, local-link permission, remote-only routing, real remote page text/screenshots, and owner-scoped history deletion. | Browserless token for new remote captures. Public-page reading is supported; interactive remote login/form control is not implemented. |
+| Browser | Saved preferences, local-link permission, remote-only routing, real remote page text/screenshots, and owner-scoped history deletion. | Browserless token and verified provider egress isolation for new remote captures. Public-page reading is supported; interactive remote login/form control is not implemented. |
 | Google Drive | User-authorized Picker selection and real document export/upload. | Google OAuth client, restricted Picker API key, and Cloud project number. |
 | Notebook | Dedicated create/open/search/save/delete page and “save and attach”; private Markdown documents with selected text sources. | Sign-in, D1, and R2. |
 
@@ -36,6 +36,7 @@ Personalization, memory, reusable skills, share snapshots/revocation, theme pers
 | `GEMINI_API_KEY` | Optional server secret for Google video/music and other allowed Google models. |
 | `ANTHROPIC_API_KEY` | Optional secret for the existing Anthropic adapter; it does not override the beta text-model policy. |
 | `BROWSERLESS_API_TOKEN`, `BROWSERLESS_ENDPOINT` | Optional remote-browser secret and approved official HTTPS endpoint. |
+| `BROWSERLESS_EGRESS_POLICY_VERIFIED=true` | Operator attestation that private-network blocking, browser isolation and provider resource limits have been verified. Remote capture stays disabled without it; see [verification requirements](docs/browser-egress-security.md). |
 | `GOOGLE_DRIVE_CLIENT_ID`, `GOOGLE_DRIVE_PICKER_KEY`, `GOOGLE_DRIVE_APP_ID` | Browser OAuth client ID, restricted browser API key, and numeric Cloud project number. These public configuration values are returned only to signed-in clients. |
 | `SCHEDULE_RUNNER_ENABLED=true`, `SCHEDULE_RUNNER_SECRET` | Enable the authenticated runner; the secret must be at least 32 characters. An external scheduled caller is also required. |
 | `ADMIN_USER_ID` | Optional exact Sites application user ID for administrator access. |
@@ -76,6 +77,8 @@ For development use `pnpm dev`, or `sites-preview start <absolute-checkout>` in 
 
 Conversations, documents, media, generated files, settings, browser captures, and scheduled tasks require sign-in and server-side ownership checks. Public share tokens expose a conversation snapshot until revoked; attached file bodies are omitted, but text included in the conversation remains visible. Account-data deletion removes owned workspace data and stored objects while preserving usage/accounting records and the separate ChatGPT account.
 
-`/api/health/live` probes the service; `/api/health/ready` checks access to usage and the four new tables plus the presence of the text-provider key. These probes do not establish live provider access or fully validate every table column/migration. API responses use request IDs and cache controls; logs must not contain credentials or prompt contents.
+`/api/health/live` probes the service; `/api/health/ready` checks the five existing critical tables, storage binding and OpenAI key. Readiness requests share an in-flight check, briefly cache its health result, and have a three-second response deadline. These probes do not establish live provider access or fully validate every table column/migration. API responses use request IDs and cache controls; logs must not contain credentials or prompt contents.
 
 Commercial billing remains gated by its separate rate/launch configuration, `TOSS_SECRET_KEY`, `TOSS_CLIENT_KEY`, and `LAUNCH_APPROVED`. This change does not enable customer payments or approve additional spend.
+
+The [November 10 security backport](docs/security-backport-2026-11-10.md) documents the integration, storage, request-capacity and upload safeguards added to this GitHub baseline, their verification commands, and the remaining infrastructure checks.

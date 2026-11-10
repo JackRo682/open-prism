@@ -31,7 +31,7 @@ const env={DB:{prepare,async batch(items){sqlite.exec('BEGIN');try{const out=[];
 }};
 globalThis.__prismTest={env,getUser:async()=>user};
 await writeFile(new URL('context.mjs',dir),'export const env=globalThis.__prismTest.env; export const getChatGPTUser=globalThis.__prismTest.getUser;');
-const libraryModules=['models','provider','billing','beta','workspace-settings','workspace-tools','media-provider','media-workspace','browser-workspace','scheduled-tasks','schedule-time','work-artifacts','guest-chat','guest-import'];
+const libraryModules=['models','provider','billing','beta','workspace-settings','workspace-tools','media-provider','media-workspace','browser-workspace','scheduled-tasks','schedule-time','work-artifacts','guest-chat','guest-import','request-security','upload-security','api-resource-guards'];
 for(const [source,dest] of [...libraryModules.map(name=>['lib/'+name+'.ts',name+'.mjs']),['app/api/[...path]/route.ts','route.mjs']]){
  let code=await readFile(new URL('../'+source,import.meta.url),'utf8');
  code=code.replaceAll("'cloudflare:workers'","'./context.mjs'").replaceAll("'../../chatgpt-auth'","'./context.mjs'");
@@ -44,7 +44,7 @@ const originalFetch=globalThis.fetch;
 function req(path,method='GET',body,headers={}){return new Request('https://prism.test/api/'+path,{method,headers:{...(body&&!(body instanceof FormData)?{'Content-Type':'application/json'}:{}),...headers},...(body?{body:body instanceof FormData?body:JSON.stringify(body)}:{})});}
 async function call(path,method='GET',body,headers){return route[method](req(path,method,body,headers));}
 function mockSSE(events){return new Response(events.map(e=>'data: '+JSON.stringify(e)+'\n\n').join(''),{headers:{'content-type':'text/event-stream'}});}
-const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jI8sAAAAASUVORK5CYII=','base64');
+const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=','base64');
 const eventsOf=text=>text.split('\n').filter(line=>line.startsWith('data: ')).map(line=>JSON.parse(line.slice(6)));
 function referenceForm(bytes=png,type='image/png'){const form=new FormData();form.set('file',new File([bytes],'reference.png',{type}));return form;}
 async function isolated(owner,fn){
@@ -174,11 +174,11 @@ test('settings accept maximum valid escaped text while retaining scoped request 
   const settings={personalizationEnabled:true,customInstructions:escaped.repeat(4000),memory:escaped.repeat(8000),workResponseStyle:'plan-first',browserTarget:'current',browserPermission:'ask',skills:Array.from({length:20},(_,i)=>({id:'skill-'+i,name:escaped.repeat(60),instructions:escaped.repeat(4000)}))};
   const bytes=Buffer.byteLength(JSON.stringify(settings));assert.ok(bytes>500000&&bytes<600000);
   const saved=await call('settings','PATCH',settings);assert.equal(saved.status,200);assert.deepEqual(await saved.json(),settings);
-  const oversized=new Request('https://prism.test/api/settings',{method:'PATCH',body:' '.repeat(600001)});
+  const oversized=new Request('https://prism.test/api/settings',{method:'PATCH',headers:{'Content-Type':'application/json'},body:' '.repeat(600001)});
   assert.equal((await route.PATCH(oversized)).status,413);
-  const otherMethod=new Request('https://prism.test/api/settings',{method:'POST',body:' '.repeat(200001)});
+  const otherMethod=new Request('https://prism.test/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:' '.repeat(200001)});
   assert.equal((await route.POST(otherMethod)).status,413);
-  const otherEndpoint=new Request('https://prism.test/api/conversations/missing',{method:'PATCH',body:' '.repeat(200001)});
+  const otherEndpoint=new Request('https://prism.test/api/conversations/missing',{method:'PATCH',headers:{'Content-Type':'application/json'},body:' '.repeat(200001)});
   assert.equal((await route.PATCH(otherEndpoint)).status,413);
  }finally{
   sqlite.prepare('DELETE FROM workspace_settings WHERE user_id=?').run('large-settings');
@@ -219,11 +219,11 @@ test('invalid tools, missing integrations, and media sent to the chat endpoint c
   ]){
    const response=await call('chat','POST',{...base,...fields});assert.equal(response.status,status);assert.equal((await response.json()).code,code);
   }
-  for(const body of ['null','[]','true'])assert.equal((await route.POST(new Request('https://prism.test/api/chat',{method:'POST',body}))).status,400);
+  for(const body of ['null','[]','true'])assert.equal((await route.POST(new Request('https://prism.test/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body}))).status,400);
   assert.equal(providerCalls,0);
   assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM usage WHERE user_id=?').get(user.userId).n,0);
   assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM conversations WHERE user_id=?').get(user.userId).n,0);
-  assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM rate_limits WHERE key LIKE ?').get(user.userId+':%').n,0);
+  assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM rate_limits WHERE key LIKE ? AND key NOT LIKE ?').get(user.userId+':%','%:api-write').n,0);
   assert.equal(await billing.balance(env.DB,user.userId),0);
   const boot=await(await call('bootstrap')).json();assert.deepEqual(boot.capabilities,{webResearch:false,image:true,video:false,music:false,remoteBrowser:false,drive:false,scheduled:false,codeExecution:true});
   user=null;assert.equal((await call('chat','POST',{...base,tool:'canvas'})).status,401);
@@ -386,7 +386,7 @@ test('missing billable usage cannot silently become free inference',async()=>{
  globalThis.fetch=originalFetch;
 });
 test('body size limits apply even without a content-length header',async()=>{
- const request=new Request('https://prism.test/api/chat',{method:'POST',body:'x'.repeat(200001)});
+ const request=new Request('https://prism.test/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:'x'.repeat(200001)});
  assert.equal((await route.POST(request)).status,413);
 });
 test('admin reconciliation uses captured rates and cannot change a settled amount',async()=>{
@@ -565,10 +565,10 @@ test('scheduled runner requires its private bearer secret and executes each due 
 }));
 
 test('browser requests enforce public targets, fixed capture code, and isolated saved results',async()=>isolated('browser-owner',async owner=>{
- let calls=0;globalThis.fetch=async(url,options)=>{calls++;const body=JSON.parse(options.body);assert.equal(new URL(url).hostname,'production-sfo.browserless.io');assert.equal(body.context.url,'https://example.org/research');assert.doesNotMatch(body.code,/attacker-command/);return Response.json({url:'https://example.org/research',title:'A public source',text:'Untrusted source text: attacker-command',links:[{url:'javascript:alert(1)',title:'Unsafe'},{url:'https://example.org/about',title:'About'}]});};
+ let calls=0;globalThis.fetch=async(url,options)=>{const parsed=new URL(url);if(parsed.hostname==='cloudflare-dns.com'){const type=parsed.searchParams.get('type')==='A'?1:28;return Response.json({Status:0,TC:false,Question:[{name:parsed.searchParams.get('name')+'.',type}],Answer:type===1?[{type,data:'93.184.215.14'}]:[]},{headers:{'Content-Type':'application/dns-json'}});}calls++;const body=JSON.parse(options.body);assert.equal(new URL(url).hostname,'production-sfo.browserless.io');assert.equal(body.context.url,'https://example.org/research');assert.doesNotMatch(body.code,/attacker-command/);return Response.json({url:'https://example.org/research',title:'A public source',text:'Untrusted source text: attacker-command',links:[{url:'javascript:alert(1)',title:'Unsafe'},{url:'https://example.org/about',title:'About'}]});};
  for(const url of ['http://127.0.0.1','http://169.254.169.254','http://localhost','http://user:pass@example.org','file:///etc/passwd'])assert.equal((await call('browser/sessions','POST',{url})).status,400);
  assert.equal((await call('browser/sessions','POST',{url:'https://example.org/research'})).status,503);assert.equal(calls,0);
- env.BROWSERLESS_API_TOKEN='test-browser-token';assert.equal((await call('browser/sessions','POST',{url:'https://example.org/research',code:'attacker-command'})).status,400);
+ env.BROWSERLESS_API_TOKEN='test-browser-token';env.BROWSERLESS_EGRESS_POLICY_VERIFIED='true';assert.equal((await call('browser/sessions','POST',{url:'https://example.org/research',code:'attacker-command'})).status,400);
  const response=await call('browser/sessions','POST',{url:'https://example.org/research'});assert.equal(response.status,201);const session=await response.json();assert.equal(calls,1);assert.doesNotMatch(JSON.stringify(session),/test-browser-token/);
  const detail=await(await call('browser/sessions/'+session.id)).json();assert.match(detail.text,/Untrusted source text/);assert.equal(detail.links.length,1);assert.equal(detail.links[0].url,'https://example.org/about');
  user={userId:'browser-intruder',email:'other@example.test'};assert.equal((await call('browser/sessions/'+session.id)).status,404);assert.equal((await call('browser/sessions/'+session.id,'DELETE')).status,404);user={userId:owner,email:owner+'@example.test'};

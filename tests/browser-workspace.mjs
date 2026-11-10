@@ -9,6 +9,13 @@ await mkdir(output, { recursive: true });
 const source = await readFile(new URL('../lib/browser-workspace.ts', import.meta.url), 'utf8');
 await writeFile(new URL('browser-workspace.mjs', output), ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText);
 const { normalizeBrowserUrl, browserlessEndpoint, handleBrowser, BROWSER_CAPTURE_PROGRAM } = await import(new URL('browser-workspace.mjs', output));
+const configured = { BROWSERLESS_API_TOKEN: 'unit-test-secret', BROWSERLESS_EGRESS_POLICY_VERIFIED: 'true' };
+function dnsResponse(url) {
+  const parsed = new URL(url);
+  if (parsed.hostname !== 'cloudflare-dns.com') return null;
+  const type = parsed.searchParams.get('type') === 'A' ? 1 : 28;
+  return Response.json({ Status: 0, TC: false, Question: [{ name: parsed.searchParams.get('name') + '.', type }], Answer: type === 1 ? [{ type, data: '93.184.215.14' }] : [] }, { headers: { 'Content-Type': 'application/dns-json' } });
+}
 const schema = await readFile(new URL('../drizzle/0005_media_and_browser.sql', import.meta.url), 'utf8');
 
 function fixture(t) {
@@ -51,6 +58,7 @@ test('missing Browserless credentials never fetch a page, reserve usage, or inve
 test('real handler preserves rendered results, drops unsafe links, and isolates history and deletion by owner', async t => {
   const { sqlite, call } = fixture(t);
   globalThis.fetch = async (url, options) => {
+    const dns = dnsResponse(url); if (dns) return dns;
     assert.equal(new URL(url).hostname, 'production-sfo.browserless.io');
     assert.equal(new URL(url).searchParams.get('token'), 'unit-test-secret');
     const request = JSON.parse(options.body);
@@ -58,7 +66,7 @@ test('real handler preserves rendered results, drops unsafe links, and isolates 
     assert.equal(JSON.stringify(request).includes('unit-test-secret'), false);
     return Response.json({ data: { url: 'https://example.com/', title: 'Example', text: 'Actual transport fixture text', links: [{ url: 'https://example.com/next', title: 'Next' }, { url: 'http://127.0.0.1/', title: 'Private' }] } });
   };
-  const created = await call('POST', 'alice', undefined, { url: 'https://example.com/' }, { BROWSERLESS_API_TOKEN: 'unit-test-secret' });
+  const created = await call('POST', 'alice', undefined, { url: 'https://example.com/' }, configured);
   assert.equal(created.status, 201);
   const capture = await created.json();
   assert.equal(capture.text, 'Actual transport fixture text');
@@ -76,8 +84,8 @@ test('real handler preserves rendered results, drops unsafe links, and isolates 
 
 test('provider errors release the active lock and do not save a successful-looking capture', async t => {
   const { sqlite, call } = fixture(t);
-  globalThis.fetch = async () => new Response('Secret upstream diagnostics', { status: 500 });
-  const response = await call('POST', 'alice', undefined, { url: 'https://example.com/' }, { BROWSERLESS_API_TOKEN: 'unit-test-secret' });
+  globalThis.fetch = async url => dnsResponse(url) || new Response('Secret upstream diagnostics', { status: 500 });
+  const response = await call('POST', 'alice', undefined, { url: 'https://example.com/' }, configured);
   assert.equal(response.status, 502);
   assert.doesNotMatch(await response.text(), /Secret|unit-test-secret/);
   assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM browser_sessions').get().n, 0);
@@ -89,10 +97,44 @@ test('daily visit cap blocks provider access and unsafe upstream redirects canno
   const day = Math.floor(Date.now() / 86400000);
   sqlite.prepare('INSERT INTO rate_limits VALUES (?,5,?)').run('browser:day:user:alice:' + day, (day + 1) * 86400000);
   let calls = 0;
-  globalThis.fetch = async () => { calls += 1; return Response.json({ url: 'http://127.0.0.1/', title: 'Private', text: 'Private data' }); };
-  assert.equal((await call('POST', 'alice', undefined, { url: 'https://example.com/' }, { BROWSERLESS_API_TOKEN: 'unit-test-secret' })).status, 429);
+  globalThis.fetch = async url => { const dns = dnsResponse(url); if (dns) return dns; calls += 1; return Response.json({ url: 'http://127.0.0.1/', title: 'Private', text: 'Private data' }); };
+  assert.equal((await call('POST', 'alice', undefined, { url: 'https://example.com/' }, configured)).status, 429);
   assert.equal(calls, 0);
-  const redirected = await call('POST', 'bob', undefined, { url: 'https://example.com/' }, { BROWSERLESS_API_TOKEN: 'unit-test-secret' });
+  const redirected = await call('POST', 'bob', undefined, { url: 'https://example.com/' }, configured);
   assert.equal(redirected.status, 400);
+  assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM browser_sessions').get().n, 0);
+});
+
+
+test('a provider token alone cannot enable remote captures without a verified egress policy', async t => {
+  const { sqlite, call } = fixture(t);
+  let calls = 0;
+  globalThis.fetch = async () => { calls++; throw new Error('No external calls before policy verification'); };
+  for (const flag of [undefined, '', 'false', 'TRUE']) {
+    const env = { BROWSERLESS_API_TOKEN: 'unit-test-secret', BROWSERLESS_EGRESS_POLICY_VERIFIED: flag };
+    const rejected = await call('POST', 'alice', undefined, { url: 'https://example.com/' }, env);
+    assert.equal(rejected.status, 503);
+    assert.equal((await rejected.json()).code, 'BROWSER_NETWORK_POLICY_REQUIRED');
+    assert.equal((await (await call('GET', 'alice', undefined, undefined, env)).json()).configured, false);
+  }
+  assert.equal(calls, 0);
+  assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM rate_limits').get().n, 0);
+});
+
+test('unsafe or unverifiable DNS never reaches the provider and releases the owner lock', async t => {
+  const { sqlite, call } = fixture(t);
+  let providerCalls = 0;
+  globalThis.fetch = async url => {
+    const dns = dnsResponse(url);
+    if (!dns) { providerCalls++; throw new Error('Must not call Browserless'); }
+    const body = await dns.json();
+    body.Answer = [{ type: 1, data: '169.254.169.254' }];
+    return Response.json(body, { headers: { 'Content-Type': 'application/dns-json' } });
+  };
+  const response = await call('POST', 'alice', undefined, { url: 'https://metadata.public-domain.com/' }, configured);
+  assert.equal(response.status, 400);
+  assert.equal((await response.json()).code, 'BROWSER_DESTINATION_REJECTED');
+  assert.equal(providerCalls, 0);
+  assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM rate_limits WHERE key LIKE 'browser:active:%'").get().n, 0);
   assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM browser_sessions').get().n, 0);
 });
