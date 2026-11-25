@@ -2,7 +2,7 @@
   "name": "GetOpenPrism mobile",
   "image": "mcr.microsoft.com/devcontainers/javascript-node:1-24-bookworm",
   "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}/mobile",
-  "postCreateCommand": "npm install",
+  "postCreateCommand": "npm ci",
   "forwardPorts": [
     8081
   ],

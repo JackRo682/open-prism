@@ -21,22 +21,29 @@ jobs:
       CI: '1'
       EXPO_NO_TELEMETRY: '1'
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: mobile/.nvmrc
-      - run: npm install --no-fund --no-audit
-      - name: Export the generated npm lock for the setup commit
-        run: |
-          node -e "const fs=require('node:fs'); const z=require('node:zlib'); const out=z.gzipSync(fs.readFileSync('package-lock.json')).toString('base64'); for(let i=0;i<out.length;i+=900) console.log('LOCKPART '+out.slice(i,i+900));"
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - run: npm ci --no-fund --no-audit
       - run: npm run typecheck
       - run: npm run check:expo
       - run: npm run export
-      - name: Save dependency lock for the initial setup
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: mobile-dependency-lock
-          path: mobile/package-lock.json
-          if-no-files-found: error
+      - name: Check the browser development server
+        run: |
+          npm run web -- --port 8081 > "$RUNNER_TEMP/expo-mobile.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          for attempt in {1..45}; do
+            if curl -fsS http://localhost:8081/status 2>/dev/null | grep -q 'packager-status:running'; then
+              curl -fsS http://localhost:8081/ | grep -qi '<html'
+              exit 0
+            fi
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/expo-mobile.log"
+          exit 1

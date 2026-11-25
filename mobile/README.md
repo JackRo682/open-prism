@@ -11,7 +11,7 @@ Open the `JackRo682/open-prism` repository and select the branch containing this
 With Node 24 LTS, open a terminal in `mobile/`:
 
 ```sh
-npm install
+npm ci
 npm run web
 ```
 
