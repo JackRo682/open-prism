@@ -118,6 +118,7 @@ export default function Workspace() {
     const sidebarRef = useRef<HTMLElement>(null);
     const followBottom = useRef(true);
     const abortRef = useRef<AbortController | null>(null), endRef = useRef<HTMLDivElement>(null), inputRef = useRef<HTMLTextAreaElement>(null), uploadRef = useRef<HTMLInputElement>(null), runningId = useRef<string | undefined>(undefined);
+    const sendLock = useRef(false);
     useEffect(() => () => abortRef.current?.abort(), []);
     const availableModels = boot.models ?? (boot.beta ? MODELS.filter(m => m.id === 'gpt-6.1-sol') : MODELS);
     const selected = findModel(modelId) || MODELS[3], connected = Object.values(boot.providers).filter(p => p.configured).length;
@@ -324,7 +325,7 @@ export default function Workspace() {
         }
     }
     async function send() {
-        if (!prompt.trim() || busy || !ready || uploading)
+        if (!prompt.trim() || busy || sendLock.current || !ready || uploading)
             return;
         setError('');
         followBottom.current = true;
@@ -342,6 +343,10 @@ export default function Workspace() {
             setError('Connect ' + [...new Set(targets.filter(id => !boot.providers[findModel(id)!.provider].configured).map(id => PROVIDERS[findModel(id)!.provider].name))].join(' and ') + ' in Settings to start a real AI response.');
             return;
         }
+        // Lock synchronously before React re-renders so rapid clicks cannot
+        // create two conversations from the same prompt.
+        if (sendLock.current) return;
+        sendLock.current = true;
         const controller = new AbortController();
         abortRef.current = controller;
         setBusy(true);
@@ -389,6 +394,7 @@ export default function Workspace() {
         }
         setBusy(false);
         abortRef.current = null;
+        sendLock.current = false;
         loadChats();
     }
     async function generateMedia(kind:'image'|'video'|'music',description=prompt){
@@ -531,7 +537,7 @@ export default function Workspace() {
    </nav>
    <section className="gemini-notebooks"><h2>노트북</h2><button className="gemini-nav-item" onClick={() => go('/notebooks/new')} title="새 노트북"><Plus size={21}/><span>새 노트북</span></button>{files.filter(file => file.name.endsWith('.md')).slice(0,3).map(file => <button key={file.id} className="gemini-nav-item gemini-notebook-item" onClick={() => { setAttached([file.id]); go('/chat'); setNotice('노트북을 첨부했습니다.'); }} title={file.name}><NotebookPen size={17}/><span>{file.name.replace(/\.md$/, '')}</span></button>)}</section>
    <button className="gemini-activity" onClick={() => go(boot.user ? '/history' : '/settings')}><History size={21}/><span>{boot.user ? 'Prism 채팅 기록이 저장됩니다' : 'Prism에 로그인하고 시작하세요'}<u>{boot.user ? '활동 및 대화 관리' : '여기에서 로그인'}</u></span></button>
-   {chats.length > 0 && <section className="gemini-recent"><h2>최근</h2>{chats.slice(0,8).map(chat => <button key={chat.id} className={chatId === chat.id ? 'is-active' : ''} onClick={() => go('/chat/' + chat.id)} title={chat.title}>{chat.title}</button>)}</section>}
+   {chats.length > 0 && <section className="gemini-recent"><h2>최근</h2>{chats.map(chat => <button key={chat.id} className={chatId === chat.id ? 'is-active' : ''} onClick={() => go('/chat/' + chat.id)} title={chat.title}>{chat.title}</button>)}</section>}
    <div className="gemini-account-row"><button className="gemini-account" onClick={() => go('/settings')}><span className="gemini-avatar">{boot.user?.name?.[0]?.toUpperCase() || 'P'}</span><span><strong>{boot.user?.name || 'Prism'}</strong><small>{boot.user ? boot.beta ? '무료 베타' : '개인 계정' : '로그인'}</small></span></button><SettingsMenu onNavigate={go} onHelp={() => setHelp(true)} signedIn={!!boot.user} beta={boot.beta} triggerClassName="gemini-settings-trigger"/></div>
  </aside>
  <div className="main-shell gemini-workspace" data-glow={view === 'chat' && messages.length === 0 && composerTool !== 'video'}><WorkspaceHeader onMenu={() => { if (window.matchMedia('(max-width: 767px)').matches) setMobile(true); else setCollapsed(false); }} onNew={newChat} onNotice={setNotice} showNavigation={collapsed}/>
