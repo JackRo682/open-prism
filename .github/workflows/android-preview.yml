@@ -39,9 +39,11 @@ jobs:
         run: npx --no-install expo prebuild --platform android --no-install
       - name: Build a standalone APK for phones and emulators
         working-directory: mobile/android
-        run: >
-          bash ./gradlew :app:assembleRelease --no-daemon --max-workers=2
-          -PreactNativeArchitectures=arm64-v8a,x86_64
+        run: |
+          export JAVA_HOME="$JAVA_HOME_21_X64"
+          export PATH="$JAVA_HOME/bin:$PATH"
+          bash ./gradlew :app:assembleRelease --info --no-daemon --max-workers=2 \
+            -PreactNativeArchitectures=arm64-v8a,x86_64
       - name: Check the APK signature and record its checksum
         run: |
           apk=android/app/build/outputs/apk/release/app-release.apk
