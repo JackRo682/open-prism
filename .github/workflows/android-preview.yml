@@ -3,7 +3,7 @@ name: Android preview APK
 on:
   push:
     branches: ['mobile/**']
-    paths: ['mobile/**', '.github/workflows/android-preview.yml']
+    paths: ['mobile/**', 'scripts/android-preview-smoke.py', '.github/workflows/android-preview.yml']
   workflow_dispatch:
 
 permissions:
@@ -60,4 +60,40 @@ jobs:
           path: mobile/preview/
           compression-level: 0
           if-no-files-found: error
+          retention-days: 7
+
+  emulator:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      ANDROID_TEST_APK: ${{ github.workspace }}/preview/GetOpenPrism-preview.apk
+      ANDROID_TEST_OUTPUT: ${{ github.workspace }}/android-test-results
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: GetOpenPrism-Android-preview
+          path: preview
+      - name: Verify the APK downloaded from the build
+        working-directory: preview
+        run: sha256sum -c SHA256SUMS
+      - name: Allow the runner to use hardware virtualization
+        run: sudo chmod a+rw /dev/kvm
+      - name: Install the app and test Android navigation
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          script: python3 scripts/android-preview-smoke.py
+      - name: Retain screenshots and runtime logs
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: GetOpenPrism-Android-device-test
+          path: android-test-results/
           retention-days: 7
