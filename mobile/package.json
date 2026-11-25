@@ -14,7 +14,8 @@
     "start:dev": "expo start --dev-client",
     "typecheck": "tsc --noEmit",
     "check:expo": "expo install --check",
-    "export": "expo export --platform all"
+    "export": "expo export --platform all",
+    "verify": "npm run typecheck && npm run check:expo && npm run export"
   },
   "dependencies": {
     "@expo/metro-runtime": "58.0.17",
