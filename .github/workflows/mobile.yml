@@ -28,6 +28,9 @@ jobs:
         with:
           node-version-file: mobile/.nvmrc
       - run: npm install --no-fund --no-audit
+      - name: Export the generated npm lock for the setup commit
+        run: |
+          node -e "const fs=require('node:fs'); const z=require('node:zlib'); const out=z.gzipSync(fs.readFileSync('package-lock.json')).toString('base64'); for(let i=0;i<out.length;i+=900) console.log('LOCKPART '+out.slice(i,i+900));"
       - run: npm run typecheck
       - run: npm run check:expo
       - run: npm run export
