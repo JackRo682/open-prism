@@ -1,0 +1,49 @@
+name: Mobile checks
+on:
+  pull_request:
+    paths:
+      - 'mobile/**'
+      - '.github/workflows/mobile.yml'
+      - '.devcontainer/mobile/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mobile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: mobile
+    env:
+      CI: '1'
+      EXPO_NO_TELEMETRY: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: mobile/.nvmrc
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - run: npm ci --no-fund --no-audit
+      - run: npm run typecheck
+      - run: npm run check:expo
+      - run: npm run export
+      - name: Check the browser development server
+        run: |
+          npm run web -- --port 8081 > "$RUNNER_TEMP/expo-mobile.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          for attempt in {1..45}; do
+            if curl -fsS http://localhost:8081/status 2>/dev/null | grep -q 'packager-status:running'; then
+              curl -fsS http://localhost:8081/ | grep -qi '<html'
+              exit 0
+            fi
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/expo-mobile.log"
+          exit 1
